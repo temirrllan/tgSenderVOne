@@ -10,7 +10,6 @@ export interface IUser extends Document {
   level: number;
   ref: string;
   referrals: string[];
-  isAdmin: boolean;
   isBanned: boolean;
   createdAt?: Date;
   updatedAt?: Date;
@@ -27,7 +26,6 @@ const userSchema = new Schema<IUser>(
     ref: { type: String, default: null },
     referrals: [{ type: String, ref: "User" }],
     level: { type: Number, default: 0 },
-    isAdmin: { type: Boolean, default: false },
     isBanned: { type: Boolean, default: false },
   },
   { timestamps: true }
