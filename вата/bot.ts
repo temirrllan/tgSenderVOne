@@ -48,7 +48,7 @@ const MINI_APP_DESCRIPTION = `Добро пожаловать в наш мини
 Как это работает (кратко):
 1) Регистрируетесь и привязываете номер (через кнопку ниже).
 2) Покупаете пакет с нужным количеством номеров/лимитов.
-3) Создаёте кампанию: загружаете список получателей (только opt-in), пишете текст, ставите расписание.
+3) Создаёте кампанию: загружаете список получателей (только opt-in), пишите текст, ставите расписание.
 4) Система ставит задачи в очередь и аккуратно отправляет, соблюдая лимиты и правила.
 5) Получаете отчёты и в любой момент можете приостановить кампанию.
 `;
@@ -107,6 +107,7 @@ async function isAncestor(ancestorId: string | number, candidateId: string | num
 
 /**
  * Простая логика начисления реферальных бонусов по уровням
+ * CHANGED: сохр. в refBalance и уведомляет каждого уровня
  */
 async function referralLogic(newUser: any, levels = 3, amount = 500) {
   try {
@@ -137,6 +138,10 @@ async function referralLogic(newUser: any, levels = 3, amount = 500) {
 
 /* ----------------- Save / update user ----------------- */
 
+/**
+ * CHANGED: теперь не затираем телефон если не передан; читаем tgImage если есть;
+ * пытаемся получить photo link если нет tgImage.
+ */
 async function saveOrUpdateUserFromCtx(ctx: Context, phoneIfAny?: string | null) {
   const from = (ctx as any).from!;
   const chatId = (ctx as any).chat?.id ?? from.id;
@@ -202,6 +207,9 @@ async function saveOrUpdateUserFromCtx(ctx: Context, phoneIfAny?: string | null)
 
 /* ----------------- Deeplink helpers ----------------- */
 
+/**
+ * CHANGED: если BOT_USERNAME нет в .env — пробуем getMe() и кешируем
+ */
 async function ensureBotUsername() {
   if (BOT_USERNAME) return BOT_USERNAME;
   try {
@@ -225,6 +233,13 @@ async function buildDeeplinkForTgId(tgId: number | string) {
 
 /* ----------------- /start handler ----------------- */
 
+/**
+ * CHANGED:
+ * - поддержка payload (ctx.startPayload или /start <payload>)
+ * - проверка self-referral
+ * - предотвращение циклов (isAncestor)
+ * - аккуратное добавление реферала и начисление бонусов
+ */
 bot.start(async (ctx: Context & { startPayload?: string; message?: any }) => {
   const from = (ctx as any).from!;
   // payload может быть в ctx.startPayload или в тексте /start <payload>
@@ -243,6 +258,7 @@ bot.start(async (ctx: Context & { startPayload?: string; message?: any }) => {
         if (String(refCandidate.tgId) === String(from.id)) {
           await (ctx as any).reply("Реферальная ссылка недействительна: вы не можете указывать себя как реферера.");
         } else {
+          // проверяем что newUser (from.id) не является предком refCandidate (иначе цикл)
           const createsCycle = await isAncestor(from.id, refCandidate.tgId);
           if (createsCycle) {
             await (ctx as any).reply("Реферальная ссылка недействительна: это создаёт циклическую привязку рефералов.");
@@ -266,6 +282,8 @@ bot.start(async (ctx: Context & { startPayload?: string; message?: any }) => {
       if (validRefUser) {
         try {
           await User.updateOne({ _id: validRefUser._id }, { $addToSet: { referrals: newUser.tgId } }).exec();
+          // начисляем бонус напрямую новому пользователю? В твоём варианте — вы делали update balance для newUser
+          // Я оставил начисление баланса новичку (как у тебя было): +500
           await User.updateOne({ _id: newUser._id }, { $inc: { balance: 500 } }).exec();
 
           try {
@@ -277,6 +295,7 @@ bot.start(async (ctx: Context & { startPayload?: string; message?: any }) => {
             console.warn("Couldn't notify refUser", validRefUser.tgId, notifyErr);
           }
 
+          // распределяем по уровнем, если нужно
           await referralLogic(newUser, 3, 500);
         } catch (e) {
           console.warn("Error processing ref rewards", e);
@@ -342,6 +361,7 @@ bot.hears(/^(Мини-апп|мини-апп|Mini|app)$/i, async (ctx: Context) 
 
 /**
  * Реферальная ссылка — возвращаем deeplink текущего пользователя
+ * CHANGED: uses buildDeeplinkForTgId which can call getMe() if BOT_USERNAME not set
  */
 bot.hears(/^(Реферальная ссылка|Реферал|Рефералька|referral)$/i, async (ctx: Context) => {
   const from = (ctx as any).from!;
@@ -364,7 +384,6 @@ bot.hears(/^(Реферальная ссылка|Реферал|Рефераль
 
 /**
  * /myref — показывает кто вас пригласил, сколько у вас рефералов и refBalance
- * Обратите внимание: в RegExp нужно экранировать "/" как "\/".
  */
 bot.hears(/^(Моя рефка|Мои рефералы|\/myref)$/i, async (ctx: Context) => {
   const from = (ctx as any).from!;
@@ -378,7 +397,7 @@ bot.hears(/^(Моя рефка|Мои рефералы|\/myref)$/i, async (ctx: 
 
     const refInfo = user.ref ? `Пригласил: ${user.ref}` : "Вас никто не приглашал";
     const text = [
-      `${displayName(user)} (tgId: ${user.tgId})`,
+      `${displayName(user as any)} (tgId: ${user.tgId})`,
       refInfo,
       `Рефералов: ${refCount}`,
       `Заработано (refBalance): ${user.refBalance ?? 0}`,
@@ -394,6 +413,3 @@ bot.hears(/^(Моя рефка|Мои рефералы|\/myref)$/i, async (ctx: 
 });
 
 export default bot;
-
-
-
