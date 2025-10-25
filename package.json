@@ -14,15 +14,17 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@grammyjs/parse-mode": "^2.2.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
-    "dotenv": "^17.2.2",
+    "dotenv": "^17.2.3",
     "ejs": "^3.1.10",
     "ejs-mate": "^4.0.0",
     "express": "^5.1.0",
+    "grammy": "^1.38.3",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.18.1",
+    "mongoose": "^8.19.2",
     "morgan": "^1.10.1",
     "node-cron": "^4.2.1",
     "telegraf": "^4.16.3"
@@ -30,10 +32,11 @@
   "devDependencies": {
     "@types/cookie-parser": "^1.4.9",
     "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.3",
+    "@types/express": "^5.0.4",
     "@types/helmet": "^0.0.48",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/morgan": "^1.9.10",
-    "typescript": "^5.9.2"
+    "@types/node": "^24.9.1",
+    "typescript": "^5.9.3"
   }
 }

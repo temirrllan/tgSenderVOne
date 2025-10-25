@@ -1,126 +1,81 @@
-// src/common/mongo/Models/User.ts
-import { Schema, model, Document, Model } from "mongoose";
+import { Schema, model, Types, Document } from "mongoose";
 
-/**
- * Интерфейс документа User в базе
- */
+export type UserStatus = "active" | "blocked" | "pending";
+
 export interface IUser extends Document {
   tgId: number;
-  tgName?: string;
-  tgUsername?: string;
-  tgImage?: string;
-  phone?: string | null;
-  chatId?: number;
-  languageCode?: string;
-  balance: number;
-  refBalance: number;
-  ref?: string | null;
-  referrals: string[];
-  level: number;
-  isBanned: boolean;
-  extra?: Record<string, any>;
-  // поля для одноразового web-токена (one-time token -> обмен на JWT)
-  webToken?: string | null;
-  webTokenExpires?: Date | null;
-  createdAt?: Date;
-  updatedAt?: Date;
-  lastSeenAt?: Date;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+
+  status: UserStatus;
+  hasAccess: boolean;                 // купил доступ к приложению
+
+  // Рефералка
+  refCode: string;                    // наш уникальный код для приглашений
+  invitedBy?: Types.ObjectId;         // кто пригласил (многоуровневость строится по цепочке)
+  referrals: Types.ObjectId[];        // прямые (уровень 1)
+  referralLevels: {                   // агрегированные счётчики
+    lvl1: number; lvl2: number; lvl3: number; lvl4: number; lvl5: number;
+  };
+  referralBalance: number;            // доступно к выводу/списанию
+  referralEarnedTotal: number;        // всего заработано по рефералке
+
+  // Приложение
+  bots: Types.ObjectId[];             // его рассыльщики
+  accessGrantedAt?: Date;
+
+  createdAt: Date;
+  updatedAt: Date;
+
+  generateRefLink(botName: string): string;
 }
 
-/**
- * Интерфейс модели (с добавленным статическим методом upsertFromTelegram)
- */
-interface IUserModel extends Model<IUser> {
-  upsertFromTelegram(payload: {
-    tgId: number;
-    chatId?: number;
-    tgName?: string;
-    tgUsername?: string;
-    tgImage?: string;
-    phone?: string | null;
-    languageCode?: string;
-    extra?: Record<string, any>;
-  }): Promise<IUser>;
-}
-
-const userSchema = new Schema<IUser>(
+const UserSchema = new Schema<IUser>(
   {
-    tgId: { type: Number, required: true, unique: true },
-    tgName: { type: String },
-    tgUsername: { type: String },
-    tgImage: { type: String, default: "" },
-    phone: { type: String, default: null },
-    chatId: { type: Number },
-    languageCode: { type: String },
-    balance: { type: Number, default: 0 },
-    refBalance: { type: Number, default: 0 },
-    ref: { type: String, default: null },
-    referrals: [{ type: String, ref: "User" }],
-    level: { type: Number, default: 0 },
-    isBanned: { type: Boolean, default: false },
-    extra: { type: Schema.Types.Mixed, default: {} },
-    lastSeenAt: { type: Date, default: Date.now },
+    tgId: { type: Number, required: true, unique: true, index: true },
+    username: String,
+    firstName: String,
+    lastName: String,
 
-    // --- Добавленные поля: одноразовый токен для web (опционально)
-    webToken: { type: String, default: null },
-    webTokenExpires: { type: Date, default: null },
+    status: { type: String, enum: ["active", "blocked", "pending"], default: "active", index: true },
+    hasAccess: { type: Boolean, default: false },
+
+    refCode: { type: String, required: true, unique: true, index: true },
+    invitedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    referrals: [{ type: Schema.Types.ObjectId, ref: "User" }],
+    referralLevels: {
+      lvl1: { type: Number, default: 0 },
+      lvl2: { type: Number, default: 0 },
+      lvl3: { type: Number, default: 0 },
+      lvl4: { type: Number, default: 0 },
+      lvl5: { type: Number, default: 0 },
+    },
+    referralBalance: { type: Number, default: 0 },
+    referralEarnedTotal: { type: Number, default: 0 },
+
+    bots: [{ type: Schema.Types.ObjectId, ref: "Bot" }],
+    accessGrantedAt: Date,
   },
-  { timestamps: true }
+  { timestamps: true, versionKey: false }
 );
 
-// Индекс по tgId (на всякий случай)
-//userSchema.index({ tgId: 1 }, { unique: true });
-
-/**
- * Статический upsert: безопасно создаёт/обновляет пользователя по tgId
- * - сохраняет телефон только если он явно передан (чтобы не затирать уже записанный)
- */
-userSchema.statics.upsertFromTelegram = async function (payload: {
-  tgId: number;
-  chatId?: number;
-  tgName?: string;
-  tgUsername?: string;
-  tgImage?: string;
-  phone?: string | null;
-  languageCode?: string;
-  extra?: Record<string, any>;
-}) {
-  const query = { tgId: payload.tgId };
-  const update: any = {
-    $set: {
-      chatId: typeof payload.chatId !== "undefined" ? payload.chatId : undefined,
-      tgName: typeof payload.tgName !== "undefined" ? payload.tgName : undefined,
-      tgUsername: typeof payload.tgUsername !== "undefined" ? payload.tgUsername : undefined,
-      tgImage: typeof payload.tgImage !== "undefined" ? payload.tgImage : undefined,
-      languageCode: typeof payload.languageCode !== "undefined" ? payload.languageCode : undefined,
-      lastSeenAt: new Date(),
-      updatedAt: new Date(),
-    }
-  };
-
-  // Сохраняем телефон только если явно передали (чтобы не затирать существующий null/номер)
-  if (typeof payload.phone !== "undefined" && payload.phone !== null) {
-    update.$set.phone = payload.phone;
+// Быстрая генерация человекочитаемого кода из tgId (можно заменить на любую стратегию)
+UserSchema.pre("validate", function (next) {
+  if (!this.refCode) {
+    // base36 + контрольная пара
+    const base = this.tgId?.toString(36).toUpperCase();
+    const pad = ("" + Math.abs(this.tgId)).slice(-2).padStart(2, "0");
+    this.refCode = `${base}${pad}`;
   }
+  next();
+});
 
-  if (payload.extra) {
-    update.$set.extra = { ...(payload.extra || {}) };
-  }
-
-  const options = { upsert: true, new: true, setDefaultsOnInsert: true };
-
-  try {
-    // findOneAndUpdate с upsert — атомарно
-    const doc = await (this as IUserModel).findOneAndUpdate(query, update, options).exec();
-    return doc as IUser;
-  } catch (err: any) {
-    // При редкой гонке может быть DuplicateKey (11000) — вернём существующий документ
-    if (err && (err.code === 11000 || err.codeName === "DuplicateKey")) {
-      return (this as IUserModel).findOne(query).exec() as Promise<IUser>;
-    }
-    throw err;
-  }
+UserSchema.methods.generateRefLink = function (botName: string) {
+  return `https://t.me/${botName}?start=${this.refCode}`;
 };
 
-export const User = model<IUser, IUserModel>("User", userSchema);
-export default User;
+UserSchema.index({ invitedBy: 1 });
+UserSchema.index({ "referralLevels.lvl1": -1 });
+
+export const User = model<IUser>("User", UserSchema);

@@ -1,133 +1,232 @@
 // src/routes/auth.ts
-import express from "express";
+import express, { type Request, type Response } from "express";
 import crypto from "crypto";
-import jwt from "jsonwebtoken";
-import querystring from "querystring";
-import type { Request, Response } from "express";
-import { User } from "../common/mongo/Models/User.js";
+import jwt, { type SignOptions, type Secret } from "jsonwebtoken";
+import { Types } from "mongoose";
+import { User, type IUser } from "../common/mongo/Models/User.js";
 
 const router = express.Router();
 
-function buildDataCheckString(obj: Record<string, any>) {
-  const keys = Object.keys(obj).sort();
-  return keys.map((k) => `${k}=${obj[k]}`).join("\n");
+/* ============================
+   CONFIG
+============================ */
+const NODE_ENV = process.env.NODE_ENV || "development";
+const BOT_TOKEN = process.env.BOT_TOKEN || "";
+const COMPANY_NAME = process.env.COMPANY_NAME || "Sender";
+const AUTH_COOKIE = process.env.AUTH_COOKIE || "token";
+const TG_INITDATA_MAX_AGE = Number(process.env.TG_INITDATA_MAX_AGE ?? 60);
+const JWT_SECRET: Secret = (process.env.JWT_SECRET ?? "change_me_secret") as Secret;
+
+type ExpiresIn = NonNullable<SignOptions["expiresIn"]>;
+const JWT_EXPIRES_IN: ExpiresIn =
+  (process.env.JWT_TTL as ExpiresIn) || ("30d" as ExpiresIn);
+
+/* ============================
+   TYPES
+============================ */
+interface TelegramInitUser {
+  id: number;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  photo_url?: string;
+}
+interface TelegramParsed {
+  user: TelegramInitUser;
+  obj: Record<string, string>;
+}
+interface AuthBody {
+  initData?: string;
+  /** рефкод или tgId пригласителя */
+  ref?: string;
 }
 
-router.post("/telegram", express.json(), async (req: Request, res: Response) => {
-  try {
-    const botToken = process.env.BOT_TOKEN;
-    const jwtSecret = process.env.JWT_SECRET;
-    if (!botToken || !jwtSecret) return res.status(500).json({ ok: false, error: "server_misconfigured" });
+/* ============================
+   HELPERS
+============================ */
+function buildCheckString(obj: Record<string, string>): string {
+  return Object.keys(obj)
+    .sort()
+    .map((k) => `${k}=${obj[k]}`)
+    .join("\n");
+}
 
-    // Принять auth_data объект OR initData строку
-    let authData: Record<string, any> | null = null;
-    if (req.body?.auth_data) {
-      authData = req.body.auth_data;
-    } else if (req.body?.initData) {
-      const parsed = querystring.parse(String(req.body.initData));
-      authData = {};
-      for (const k of Object.keys(parsed)) {
-        const v = parsed[k];
-        authData[k] = Array.isArray(v) ? v[0] : v;
-      }
-    } else {
-      authData = req.body;
-    }
+function verifyTelegramInitData(initData: string, botToken: string): TelegramParsed {
+  if (!botToken) throw new Error("BOT_TOKEN not set");
 
-    if (!authData || !authData.hash) {
-      return res.status(400).json({ ok: false, error: "missing_auth_data" });
-    }
+  const data = new URLSearchParams(initData);
+  const obj: Record<string, string> = {};
+  for (const [k, v] of data.entries()) obj[k] = v;
 
-    // проверка времени (фрешнесс)
-    const authDate = Number(authData.auth_date || 0);
-    const nowSec = Math.floor(Date.now() / 1000);
-    const maxAge = 24 * 60 * 60; // 24 часа (можно уменьшить)
-    if (authDate <= 0 || Math.abs(nowSec - authDate) > maxAge) {
-      return res.status(401).json({ ok: false, error: "auth_data_too_old" });
-    }
+  const hash = obj.hash;
+  if (!hash) throw new Error("init_data_invalid");
+  delete obj.hash;
 
-    // проверка подписи
-    const data: Record<string, any> = { ...authData };
-    const receivedHash = String(data.hash);
-    delete data.hash;
-    const data_check_string = buildDataCheckString(data);
+  const secret = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
+  const checkStr = buildCheckString(obj);
+  const sign = crypto.createHmac("sha256", secret).update(checkStr).digest("hex");
+  if (sign !== hash) throw new Error("init_data_invalid");
 
-    const secret_key = crypto.createHash("sha256").update(String(botToken)).digest();
-    const hmac = crypto.createHmac("sha256", secret_key).update(data_check_string).digest("hex");
-
-    const a = Buffer.from(hmac, "hex");
-    let b: Buffer;
-    try {
-      b = Buffer.from(receivedHash, "hex");
-    } catch (e) {
-      return res.status(401).json({ ok: false, error: "invalid_hash_format" });
-    }
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-      return res.status(401).json({ ok: false, error: "invalid_auth_signature" });
-    }
-
-    // find or create user
-    const tgId = Number(authData.id);
-    if (!tgId) return res.status(400).json({ ok: false, error: "invalid_id" });
-
-    let user = await User.findOne({ tgId }).exec();
-
-    if (!user) {
-      // создаём если нет
-      const created = new User({
-        tgId,
-        tgName: [authData.first_name, authData.last_name].filter(Boolean).join(" ") || authData.username || String(tgId),
-        tgUsername: authData.username || "",
-        tgImage: authData.photo_url || "",
-        createdAt: new Date(),
-      } as any);
-      await created.save();
-      user = created;
-    } else {
-      // Обновляем профильные поля (не трогаем phone/ref и т.д.)
-      const update: any = {};
-      if (authData.photo_url && authData.photo_url !== user.tgImage) update.tgImage = authData.photo_url;
-      if (authData.username && authData.username !== user.tgUsername) update.tgUsername = authData.username;
-      const newName = [authData.first_name, authData.last_name].filter(Boolean).join(" ");
-      if (newName && newName !== user.tgName) update.tgName = newName;
-
-      if (Object.keys(update).length) {
-        await User.updateOne({ _id: user._id }, { $set: update }).exec();
-        // перезагрузим пользователя из БД, чтобы иметь актуальные поля и правильные типы
-        const reloaded = await User.findById(user._id).exec();
-        if (!reloaded) {
-          // очень редкая ситуация —:(
-          return res.status(500).json({ ok: false, error: "user_reload_failed" });
-        }
-        user = reloaded;
-      }
-    }
-
-    // На этом моменте user гарантированно не null — добавлена явная проверка выше
-    if (!user) {
-      return res.status(500).json({ ok: false, error: "user_missing_after_create" });
-    }
-
-    // Формирование JWT
-    const payload = { tgId: user.tgId, uid: String(user._id) };
-    const token = jwt.sign(payload, String(jwtSecret), { expiresIn: "30d" });
-
-    // prepare safeUser для ответа
-    const safeUser = {
-      tgId: user.tgId,
-      tgName: user.tgName ?? null,
-      tgUsername: user.tgUsername ?? null,
-      tgImage: user.tgImage ?? null,
-      phone: (user as any).phone ?? null,
-      balance: (user as any).balance ?? 0,
-      ref: (user as any).ref ?? null,
-    };
-
-    return res.json({ ok: true, token, user: safeUser });
-  } catch (err) {
-    console.error("POST /api/auth/telegram error:", err);
-    return res.status(500).json({ ok: false, error: "internal_error" });
+  const authDate = Number(obj.auth_date || 0);
+  if (!authDate || Math.abs(Date.now() / 1000 - authDate) > TG_INITDATA_MAX_AGE) {
+    throw new Error("init_data_expired");
   }
+
+  const userRaw = obj.user;
+  const user = userRaw ? (JSON.parse(userRaw) as TelegramInitUser) : null;
+  if (!user) throw new Error("user_missing");
+
+  return { user, obj };
+}
+
+function issueToken(user: IUser): string {
+  if (!JWT_SECRET) throw new Error("JWT_SECRET not set");
+  const payload = { sub: String(user._id), tgId: user.tgId };
+  const options: SignOptions = { expiresIn: JWT_EXPIRES_IN };
+  return jwt.sign(payload, JWT_SECRET, options);
+}
+
+function setAuthCookie(res: Response, token: string): void {
+  const isProd = NODE_ENV === "production";
+  res.cookie(AUTH_COOKIE, token, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
+    path: "/",
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+  });
+}
+
+function clearAuthCookie(res: Response): void {
+  const isProd = NODE_ENV === "production";
+  res.clearCookie(AUTH_COOKIE, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
+    path: "/",
+  });
+}
+
+async function ensureDevUserAccount(): Promise<IUser> {
+  const devId = 1001;
+  let user = await User.findOne({ tgId: devId }).exec();
+  if (!user) {
+    user = await User.create({
+      tgId: devId,
+      username: "dev_user",
+      firstName: "Dev",
+      lastName: "User",
+      hasAccess: true,
+      // refCode генерится в pre('validate') модели
+    });
+  }
+  return user;
+}
+
+/* ============================
+   ROUTES
+============================ */
+router.post(
+  ["/auth/telegram", "/telegram"],
+  express.json(),
+  async (req: Request<unknown, unknown, AuthBody>, res: Response) => {
+    try {
+      if (!BOT_TOKEN || !JWT_SECRET) {
+        return res.status(500).json({ ok: false, error: "server_misconfigured" });
+      }
+
+      const { initData, ref } = req.body ?? {};
+
+      // DEV fallback
+      if (!initData) {
+        if (NODE_ENV === "production") {
+          return res.status(400).json({ ok: false, error: "init_data_required" });
+        }
+        const devUser = await ensureDevUserAccount();
+        const devToken = issueToken(devUser);
+        setAuthCookie(res, devToken);
+        return res.status(200).json({
+          ok: true,
+          token: devToken,
+          user: {
+            tgId: devUser.tgId,
+            username: devUser.username,
+            firstName: devUser.firstName,
+            lastName: devUser.lastName,
+            hasAccess: devUser.hasAccess,
+            refCode: devUser.refCode,
+          },
+          company: COMPANY_NAME,
+          dev: true,
+        });
+      }
+
+      // Normal auth
+      const parsed = verifyTelegramInitData(initData, BOT_TOKEN);
+      const tg = parsed.user;
+
+      // если пришёл ref — найдём пригласителя (по refCode или tgId)
+      let inviter: IUser | null = null;
+      if (ref && String(ref) !== String(tg.id)) {
+        const maybeTgId = /^\d+$/.test(ref) ? Number(ref) : undefined;
+        inviter = await User.findOne(
+          maybeTgId != null ? { $or: [{ refCode: ref }, { tgId: maybeTgId }] } : { refCode: ref }
+        ).exec();
+      }
+
+      // нормализуем ObjectId пригласителя для записи в invitedBy
+      const inviterId: Types.ObjectId | undefined = inviter
+        ? (inviter._id as unknown as Types.ObjectId)
+        : undefined;
+
+      let user = await User.findOne({ tgId: tg.id }).exec();
+      if (user) {
+        user.username = tg.username ?? user.username ?? "";
+        user.firstName = tg.first_name ?? user.firstName ?? "";
+        user.lastName = tg.last_name ?? user.lastName ?? "";
+
+        if (!user.invitedBy && inviterId && !(user._id as unknown as Types.ObjectId).equals(inviterId)) {
+          user.invitedBy = inviterId;
+        }
+        await user.save();
+      } else {
+        user = await User.create({
+          tgId: tg.id,
+          username: tg.username ?? "",
+          firstName: tg.first_name ?? "",
+          lastName: tg.last_name ?? "",
+          invitedBy: inviterId,
+          // refCode сгенерится автоматически в pre('validate') модели User
+        });
+      }
+
+      const token = issueToken(user);
+      setAuthCookie(res, token);
+
+      return res.status(200).json({
+        ok: true,
+        token,
+        user: {
+          tgId: user.tgId,
+          username: user.username,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          hasAccess: user.hasAccess,
+          refCode: user.refCode,
+        },
+        company: COMPANY_NAME,
+      });
+    } catch (err) {
+      console.error("POST /api/auth/telegram error:", err);
+      return res.status(500).json({ ok: false, error: "internal_error" });
+    }
+  },
+);
+
+/** POST /auth/logout */
+router.post("/auth/logout", (_req: Request, res: Response) => {
+  clearAuthCookie(res);
+  res.status(200).json({ ok: true });
 });
 
 export default router;
