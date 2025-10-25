@@ -68,7 +68,7 @@ const authMiddleware: RequestHandler = async (req: Request, res: Response, next:
 };
 
 /* =========================================
-   GET /api/me — профиль
+   GET /api/me — профиль    EBANI /ME ?!?!?!? Esli eto user, to doljno bit /api/user/:id, a potom berem const userId = req.params.id;
 ========================================= */
 router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
   try {
@@ -101,7 +101,7 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
 });
 
 /* =========================================
-   GET /api/dashboard — сводка
+   GET /api/dashboard — сводка      SUKA TAKOGO NE MOZHET BIT, SMOTRI PRAVILA RESTA API
 ========================================= */
 router.get("/dashboard", authMiddleware, async (_req: Request, res: Response) => {
   try {
@@ -132,18 +132,14 @@ router.get("/dashboard", authMiddleware, async (_req: Request, res: Response) =>
 });
 
 /* =========================================
-   GET /api/bots — список ботов юзера
+   GET /api/bots — список ботов юзера NO NO NO, /api/users/:id/bots
 ========================================= */
 router.get("/bots", authMiddleware, async (_req: Request, res: Response) => {
   try {
     const u = res.locals.user as IUser | undefined;
     if (!u) return res.status(401).json({ error: "user_not_found" });
 
-    const bots = await Bot.find({ owner: u._id })
-    .select("username photoUrl messageText interval status createdAt")
-    .lean()
-    .exec();
-
+    const bots = await Bot.find({ owner: u._id }).select("username photoUrl messageText interval status createdAt").lean().exec();
 
     return res.json({ ok: true, items: bots });
   } catch (err) {
@@ -193,12 +189,7 @@ router.get("/referral", authMiddleware, async (_req: Request, res: Response) => 
     const deeplink = botName ? `https://t.me/${botName}?start=${encodeURIComponent(u.refCode)}` : null;
 
     const directCount = await User.countDocuments({ invitedBy: u._id }).exec();
-    const lastRefs = await User.find({ invitedBy: u._id })
-      .select("tgId username firstName createdAt")
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .lean()
-      .exec();
+    const lastRefs = await User.find({ invitedBy: u._id }).select("tgId username firstName createdAt").sort({ createdAt: -1 }).limit(10).lean().exec();
 
     return res.json({
       ok: true,

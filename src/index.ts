@@ -23,9 +23,6 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
  * ------------------------
  *  Изменения и пояснения
  * ------------------------
- * 1) Перевёл старт приложения в async-функцию start() — чтобы гарантированно:
- *    - дождаться подключения к БД
- *    - дождаться старта HTTP-сервера до .launch() бота (или наоборот, по желанию)
  * 2) Добавил morgan для логирования HTTP-запросов (удобно при разработке).
  * 3) Добавил helmet — базовые заголовки безопасности.
  * 4) Добавил CORS с возможностью задать FRONTEND_URL в .env (для dev/прод).
@@ -36,6 +33,7 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 /* -- Настройки middlewares -- */
 app.use(helmet()); // базовые безопасные заголовки
+
 // CORS: по умолчанию разрешаем всё в dev, но можно указать FRONTEND_URL в .env
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
 if (FRONTEND_URL) {
@@ -69,10 +67,6 @@ if (!uri) {
   process.exit(1);
 }
 
-/**
- * connectToDatabase() — теперь возвращает promise и бросает ошибку при провале.
- * Мы используем dbName 'sendingBot' как у тебя — оставил.
- */
 async function connectToDatabase() {
   try {
     await mongoose.connect(uri, { dbName: "sendingBot" });
@@ -82,6 +76,7 @@ async function connectToDatabase() {
     throw err;
   }
 }
+connectToDatabase();
 
 /* -- Router mount (api + admin and so on) -- */
 app.use("/", router);
@@ -101,86 +96,11 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 /* -- Graceful shutdown helpers -- */
 let serverInstance: any = null;
 
-async function gracefulShutdown(signal?: string) {
-  console.log("Graceful shutdown initiated", signal || "");
-  try {
-    // stop Telegram bot if running
-    try {
-      await bot.stop();
-      console.log("Telegram bot stopped");
-    } catch (e) {
-      console.warn("Error stopping bot gracefully:", e);
-    }
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+  serverInstance = app;
+});
 
-    // close HTTP server
-    if (serverInstance) {
-      await new Promise((resolve, reject) => {
-        serverInstance.close((err: any) => {
-          if (err) return reject(err);
-          resolve(null);
-        });
-      });
-      console.log("HTTP server closed");
-    }
-
-    // close mongoose connection
-    try {
-      await mongoose.connection.close();
-      console.log("Mongo connection closed");
-    } catch (e) {
-      console.warn("Error closing Mongo connection:", e);
-    }
-
-    process.exit(0);
-  } catch (e) {
-    console.error("Error during graceful shutdown:", e);
-    process.exit(1);
-  }
-}
-
-/* -- Start sequence: сначала DB, затем сервер, затем бот -- */
-async function start() {
-  try {
-    // 1) Подключаемся к БД
-    await connectToDatabase();
-
-    // 2) Запускаем HTTP-сервер
-    serverInstance = app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}, http://localhost:${PORT}`);
-    });
-
-    // 3) Запускаем Telegram Bot (подождёт готовности сервера)
-    //    Если хочешь запускать бот до сервера — поменяй порядок.
-    try {
-      await bot.launch();
-      console.log("Bot started");
-    } catch (err) {
-      console.error("Failed to start bot:", err);
-      // если бот не запустился, можно решать: завершить процесс или продолжить; сейчас завершаем.
-      throw err;
-    }
-
-    // 4) Optional: Cron jobs (если нужны) — пример:
-    // cron.schedule('* * * * *', () => { console.log('tick every minute'); });
-
-    // Обрабатываем сигналы ОС
-    process.once("SIGINT", () => gracefulShutdown("SIGINT"));
-    process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
-
-    // Обрабатываем необработанные ошибки/отклонения промисов
-    process.on("unhandledRejection", (reason) => {
-      console.error("Unhandled Rejection at:", reason);
-    });
-    process.on("uncaughtException", (err) => {
-      console.error("Uncaught Exception thrown:", err);
-      // в случае uncaught лучше завершить процесс
-      gracefulShutdown("uncaughtException");
-    });
-  } catch (err) {
-    console.error("Failed to start application:", err);
-    process.exit(1);
-  }
-}
-
-/* Запускаем всё */
-start();
+bot.launch().then(() => {
+  console.log("Telegram bot started");
+});
