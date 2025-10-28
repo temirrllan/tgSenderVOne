@@ -1,19 +1,33 @@
 // src/routes/api.ts
-import express from "express";
-import type { Request, Response, NextFunction, RequestHandler } from "express";
+import express, {
+  type Request,
+  type Response,
+  type NextFunction,
+  type RequestHandler,
+  type Router,
+} from "express";
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
 
 import { User, type IUser } from "../common/mongo/Models/User.js";
-import { Bot, type IBot } from "../common/mongo/Models/Bot.js";
+import { Bot } from "../common/mongo/Models/Bot.js";
 
-const router = express.Router();
+const router: Router = express.Router();
+
+/* ──────────────────────────────────────────
+   Единый формат ответов (как сказал начальник)
+   ────────────────────────────────────────── */
+function success(res: Response, data: unknown, status = 200, message = "success") {
+  return res.status(status).json({ status, message, data });
+}
+function fail(res: Response, status = 400, message = "error") {
+  return res.status(status).json({ status, message });
+}
 
 /* =========================================
    AUTH MIDDLEWARE
-   - Bearer <JWT> (prod/dev)
-   - Dev fallback: header x-tg-id (не в production)
-   Пользователь кладётся в res.locals.user
+   Проверяет JWT (или x-tg-id в dev)
+   user кладётся в res.locals.user
 ========================================= */
 const authMiddleware: RequestHandler = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -24,7 +38,7 @@ const authMiddleware: RequestHandler = async (req: Request, res: Response, next:
     // 1) JWT Bearer
     if (authHeader.toLowerCase().startsWith("bearer ")) {
       const token = authHeader.slice(7).trim();
-      if (!jwtSecret) return res.status(500).json({ error: "server_misconfigured" });
+      if (!jwtSecret) return fail(res, 500, "server_misconfigured");
 
       try {
         const decoded = jwt.verify(token, jwtSecret) as { sub?: string; tgId?: number | string };
@@ -43,11 +57,11 @@ const authMiddleware: RequestHandler = async (req: Request, res: Response, next:
           return next();
         }
       } catch {
-        /* пойдём во фолбек ниже */
+        /* fallthrough */
       }
     }
 
-    // 2) Dev fallback (только не в production)
+    // 2) Dev fallback
     if (!isProd) {
       const xTg = (req.header("x-tg-id") || "").trim();
       if (xTg) {
@@ -60,22 +74,22 @@ const authMiddleware: RequestHandler = async (req: Request, res: Response, next:
       }
     }
 
-    return res.status(401).json({ error: "no_auth" });
+    return fail(res, 401, "no_auth");
   } catch (err) {
     console.error("authMiddleware error", err);
-    return res.status(500).json({ error: "internal_error" });
+    return fail(res, 500, "internal_error");
   }
 };
 
 /* =========================================
-   GET /api/me — профиль    EBANI /ME ?!?!?!? Esli eto user, to doljno bit /api/user/:id, a potom berem const userId = req.params.id;
+   GET /api/me — профиль пользователя (mini-app)
 ========================================= */
 router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
   try {
     const u = res.locals.user as IUser | undefined;
-    if (!u) return res.status(401).json({ error: "user_not_found" });
+    if (!u) return fail(res, 401, "user_not_found");
 
-    const out = {
+    const data = {
       tgId: u.tgId,
       username: u.username ?? null,
       firstName: u.firstName ?? null,
@@ -93,106 +107,128 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
       accessGrantedAt: u.accessGrantedAt ?? null,
       createdAt: u.createdAt,
     };
-    return res.json({ ok: true, user: out });
+
+    return success(res, { user: data });
   } catch (err) {
     console.error("GET /api/me error", err);
-    return res.status(500).json({ error: "internal_error" });
+    return fail(res, 500, "internal_error");
   }
 });
 
 /* =========================================
-   GET /api/dashboard — сводка      SUKA TAKOGO NE MOZHET BIT, SMOTRI PRAVILA RESTA API
+   GET /api/users/:id — профиль (для приложения)
+   Доступ: сам пользователь или админ.
 ========================================= */
-router.get("/dashboard", authMiddleware, async (_req: Request, res: Response) => {
+router.get("/users/:id", authMiddleware, async (req: Request, res: Response) => {
   try {
-    const u = res.locals.user as IUser | undefined;
-    if (!u) return res.status(401).json({ error: "user_not_found" });
+    const requester = res.locals.user as IUser | undefined;
+    if (!requester) return fail(res, 401, "no_auth");
 
-    const botsCount = await Bot.countDocuments({ owner: u._id }).exec();
-    const hasAccess = !!u.hasAccess;
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "invalid_id");
 
-    return res.json({
-      ok: true,
-      data: {
-        user: {
-          tgId: u.tgId,
-          username: u.username ?? null,
-          firstName: u.firstName ?? null,
-          lastName: u.lastName ?? null,
-          hasAccess,
+    const isSelf = String(requester._id) === id;
+    const isAdmin = (requester as any).isAdmin === true;
+    if (!isSelf && !isAdmin) return fail(res, 403, "forbidden");
+
+    const user = await User.findById(id).lean().exec();
+    if (!user) return fail(res, 404, "user_not_found");
+
+    const [botsCount, directReferrals] = await Promise.all([
+      Bot.countDocuments({ owner: user._id }).exec(),
+      User.countDocuments({ invitedBy: user._id }).exec(),
+    ]);
+
+    return success(res, {
+      user: {
+        _id: user._id,
+        tgId: user.tgId,
+        username: user.username ?? null,
+        firstName: user.firstName ?? null,
+        lastName: user.lastName ?? null,
+        status: user.status,
+        hasAccess: !!user.hasAccess,
+        refCode: user.refCode,
+        referral: {
+          levels: user.referralLevels,
+          balance: user.referralBalance,
+          earnedTotal: user.referralEarnedTotal,
         },
-        botsCount,
-        hasAccess,
+        accessGrantedAt: user.accessGrantedAt ?? null,
+        createdAt: user.createdAt,
       },
+      stats: { botsCount, directReferrals },
     });
   } catch (err) {
-    console.error("GET /api/dashboard error", err);
-    return res.status(500).json({ error: "internal_error" });
+    console.error("GET /api/users/:id error", err);
+    return fail(res, 500, "internal_error");
   }
 });
 
 /* =========================================
-   GET /api/bots — список ботов юзера NO NO NO, /api/users/:id/bots
+   GET /api/bots — список ботов пользователя
 ========================================= */
 router.get("/bots", authMiddleware, async (_req: Request, res: Response) => {
   try {
     const u = res.locals.user as IUser | undefined;
-    if (!u) return res.status(401).json({ error: "user_not_found" });
+    if (!u) return fail(res, 401, "user_not_found");
 
-    const bots = await Bot.find({ owner: u._id }).select("username photoUrl messageText interval status createdAt").lean().exec();
+    const bots = await Bot.find({ owner: u._id })
+      .select("username photoUrl messageText interval status createdAt")
+      .lean()
+      .exec();
 
-    return res.json({ ok: true, items: bots });
+    return success(res, { items: bots });
   } catch (err) {
     console.error("GET /api/bots error", err);
-    return res.status(500).json({ error: "internal_error" });
+    return fail(res, 500, "internal_error");
   }
 });
 
 /* =========================================
-   GET /api/bots/:id — детальная
+   GET /api/bots/:id — конкретный бот пользователя
 ========================================= */
 router.get("/bots/:id", authMiddleware, async (req: Request, res: Response) => {
   try {
     const u = res.locals.user as IUser | undefined;
-    if (!u) return res.status(401).json({ error: "user_not_found" });
+    if (!u) return fail(res, 401, "user_not_found");
 
-    const id = req.params.id;
-    if (typeof id !== "string" || !mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: "invalid_id" });
-    }
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "invalid_id");
 
-    const botDoc = await Bot.findOne({
-      _id: new mongoose.Types.ObjectId(id),
-      owner: u._id,
-    })
+    const botDoc = await Bot.findOne({ _id: id, owner: u._id })
       .select("username photoUrl messageText interval status chats groups createdAt")
       .lean()
       .exec();
 
-    if (!botDoc) return res.status(404).json({ error: "not_found" });
-    return res.json({ ok: true, bot: botDoc });
+    if (!botDoc) return fail(res, 404, "bot_not_found");
+    return success(res, { bot: botDoc });
   } catch (err) {
     console.error("GET /api/bots/:id error", err);
-    return res.status(500).json({ error: "internal_error" });
+    return fail(res, 500, "internal_error");
   }
 });
 
 /* =========================================
-   GET /api/referral — рефералка
+   GET /api/referral — инфо по рефералке
 ========================================= */
 router.get("/referral", authMiddleware, async (_req: Request, res: Response) => {
   try {
     const u = res.locals.user as IUser | undefined;
-    if (!u) return res.status(401).json({ error: "user_not_found" });
+    if (!u) return fail(res, 401, "user_not_found");
 
     const botName = (process.env.MAIN_BOT_USERNAME || "").replace(/^@/, "");
     const deeplink = botName ? `https://t.me/${botName}?start=${encodeURIComponent(u.refCode)}` : null;
 
     const directCount = await User.countDocuments({ invitedBy: u._id }).exec();
-    const lastRefs = await User.find({ invitedBy: u._id }).select("tgId username firstName createdAt").sort({ createdAt: -1 }).limit(10).lean().exec();
+    const lastRefs = await User.find({ invitedBy: u._id })
+      .select("tgId username firstName createdAt")
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean()
+      .exec();
 
-    return res.json({
-      ok: true,
+    return success(res, {
       deeplink,
       code: u.refCode,
       levels: u.referralLevels,
@@ -203,30 +239,29 @@ router.get("/referral", authMiddleware, async (_req: Request, res: Response) => 
     });
   } catch (err) {
     console.error("GET /api/referral error", err);
-    return res.status(500).json({ error: "internal_error" });
+    return fail(res, 500, "internal_error");
   }
 });
 
 /* =========================================
    DEV helper: POST /api/dev/grant-access
-   – вручную выдать доступ (не для prod)
 ========================================= */
 router.post("/dev/grant-access", authMiddleware, express.json(), async (_req: Request, res: Response) => {
   try {
     const isProd = (process.env.NODE_ENV || "development") === "production";
-    if (isProd) return res.status(403).json({ error: "forbidden" });
+    if (isProd) return fail(res, 403, "forbidden");
 
     const u = await User.findById((res.locals.user as IUser)._id).exec();
-    if (!u) return res.status(404).json({ error: "user_not_found" });
+    if (!u) return fail(res, 404, "user_not_found");
 
     u.hasAccess = true;
     u.accessGrantedAt = new Date();
     await u.save();
 
-    return res.json({ ok: true, hasAccess: u.hasAccess, accessGrantedAt: u.accessGrantedAt });
+    return success(res, { hasAccess: u.hasAccess, accessGrantedAt: u.accessGrantedAt });
   } catch (err) {
     console.error("POST /api/dev/grant-access error", err);
-    return res.status(500).json({ error: "internal_error" });
+    return fail(res, 500, "internal_error");
   }
 });
 

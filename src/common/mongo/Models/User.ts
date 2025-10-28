@@ -1,3 +1,4 @@
+// src/common/mongo/Models/User.ts
 import { Schema, model, Types, Document } from "mongoose";
 
 export type UserStatus = "active" | "blocked" | "pending";
@@ -9,21 +10,28 @@ export interface IUser extends Document {
   lastName?: string;
 
   status: UserStatus;
-  hasAccess: boolean;                 // купил доступ к приложению
+  hasAccess: boolean; // купил доступ к приложению
 
   // Рефералка
-  refCode: string;                    // наш уникальный код для приглашений
-  invitedBy?: Types.ObjectId;         // кто пригласил (многоуровневость строится по цепочке)
-  referrals: Types.ObjectId[];        // прямые (уровень 1)
-  referralLevels: {                   // агрегированные счётчики
-    lvl1: number; lvl2: number; lvl3: number; lvl4: number; lvl5: number;
+  refCode: string; // наш уникальный код для приглашений
+  invitedBy?: Types.ObjectId; // кто пригласил (многоуровневость строится по цепочке)
+  referrals: Types.ObjectId[]; // прямые (уровень 1)
+  referralLevels: {
+    lvl1: number;
+    lvl2: number;
+    lvl3: number;
+    lvl4: number;
+    lvl5: number;
   };
-  referralBalance: number;            // доступно к выводу/списанию
-  referralEarnedTotal: number;        // всего заработано по рефералке
+  referralBalance: number; // доступно к выводу/списанию
+  referralEarnedTotal: number; // всего заработано по рефералке
 
   // Приложение
-  bots: Types.ObjectId[];             // его рассыльщики
+  bots: Types.ObjectId[]; // его рассыльщики
   accessGrantedAt?: Date;
+
+  // Админский флаг
+  isAdmin: boolean;
 
   createdAt: Date;
   updatedAt: Date;
@@ -38,7 +46,12 @@ const UserSchema = new Schema<IUser>(
     firstName: String,
     lastName: String,
 
-    status: { type: String, enum: ["active", "blocked", "pending"], default: "active", index: true },
+    status: {
+      type: String,
+      enum: ["active", "blocked", "pending"],
+      default: "active",
+      index: true,
+    },
     hasAccess: { type: Boolean, default: false },
 
     refCode: { type: String, required: true, unique: true, index: true },
@@ -56,6 +69,9 @@ const UserSchema = new Schema<IUser>(
 
     bots: [{ type: Schema.Types.ObjectId, ref: "Bot" }],
     accessGrantedAt: Date,
+
+    // Новое поле — флаг администратора
+    isAdmin: { type: Boolean, default: false },
   },
   { timestamps: true, versionKey: false }
 );

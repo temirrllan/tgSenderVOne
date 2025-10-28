@@ -71,6 +71,24 @@ async function ensureMongo() {
   }
 }
 
+/** Аккуратное редактирование: глушим 400 "message is not modified" */
+async function safeEdit(
+  ctx: MyContext,
+  html: string,
+  kb: InlineKeyboard
+): Promise<void> {
+  try {
+    await ctx.editMessageText(html, { reply_markup: kb, parse_mode: "HTML" });
+  } catch (err: any) {
+    const msg = String(err?.description || err?.message || "");
+    if (!msg.includes("message is not modified")) {
+      console.error("editMessageText error:", err);
+    }
+  } finally {
+    await ctx.answerCallbackQuery().catch(() => {});
+  }
+}
+
 /* ========= Создаём инстанс бота ========= */
 type LaunchableBot = GrammyBot<MyContext> & {
   launch: () => Promise<void>;
@@ -191,8 +209,7 @@ bot.callbackQuery("ref", async (ctx) => {
       `• Баланс: <b>${user.referralBalance.toFixed(2)}</b> ${ACCESS_CURRENCY}\n\n` +
       `<b>Ваши приглашённые (первые 20):</b>\n${refsList}`;
 
-    await ctx.editMessageText(text, { reply_markup: kbMain(user.hasAccess), parse_mode: "HTML" });
-    await ctx.answerCallbackQuery();
+    await safeEdit(ctx, text, kbMain(user.hasAccess));
   } catch (e) {
     console.error(e);
     await ctx.answerCallbackQuery({ text: "Ошибка" });
@@ -233,8 +250,7 @@ bot.callbackQuery("buy_access", async (ctx) => {
       .row()
       .text("◀️ Назад", "ref");
 
-    await ctx.editMessageText(text, { reply_markup: kb, parse_mode: "HTML" });
-    await ctx.answerCallbackQuery();
+    await safeEdit(ctx, text, kb);
   } catch (e) {
     console.error(e);
     await ctx.answerCallbackQuery({ text: "Ошибка" });
@@ -268,10 +284,11 @@ bot.callbackQuery(/^check_access_(\d{12})$/, async (ctx) => {
         await user.save();
       }
       await ctx.answerCallbackQuery({ text: "Оплата подтверждена!" });
-      await ctx.editMessageText(`🎉 Доступ активирован!\nТеперь можете пользоваться приложением.`, {
-        reply_markup: kbMain(true),
-        parse_mode: "HTML",
-      });
+      await safeEdit(
+        ctx,
+        `🎉 Доступ активирован!\nТеперь можете пользоваться приложением.`,
+        kbMain(true)
+      );
     } else if (tx.status === "pending") {
       await ctx.answerCallbackQuery({ text: "Оплата ещё в обработке…", show_alert: true });
     } else if (tx.status === "failed" || tx.status === "expired") {
