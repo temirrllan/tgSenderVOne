@@ -4,6 +4,10 @@ import { Bot as GrammyBot, Context, InlineKeyboard, session } from "grammy";
 import type { SessionFlavor } from "grammy";
 import mongoose, { Types } from "mongoose";
 
+import type { InlineKeyboardMarkup } from "grammy/types";
+
+
+
 // Модели
 import { User } from "../common/mongo/Models/User.js";
 import { TxHistory } from "../common/mongo/Models/TxHistory.js";
@@ -41,13 +45,13 @@ type MyContext = Context & SessionFlavor<MySession>;
 const initialSession = (): MySession => ({});
 
 /* ========= Helpers ========= */
-const kbMain = (_hasAccess: boolean) =>
+const kbMain = (hasAccess: boolean) =>
   new InlineKeyboard()
     .url("📲 Открыть приложение", MINIAPP_URL)
     .row()
     .text("👥 Рефералка", "ref")
     .row()
-    .text("💳 Купить доступ", "buy_access");
+    .text(hasAccess ? "✅ Доступ активен" : "💳 Купить доступ", "buy_access");
 
 function generate12DigitCode(): string {
   const ts = Date.now().toString().slice(-8);
@@ -67,6 +71,7 @@ function buildRefMessage(refLink: string) {
 
 async function ensureMongo() {
   if (mongoose.connection.readyState === 0) {
+    mongoose.set("strictQuery", true);
     await mongoose.connect(MONGO_URL, { dbName: "tgsender" });
   }
 }
@@ -75,10 +80,14 @@ async function ensureMongo() {
 async function safeEdit(
   ctx: MyContext,
   html: string,
-  kb: InlineKeyboard
+  kb?: InlineKeyboard
 ): Promise<void> {
   try {
-    await ctx.editMessageText(html, { reply_markup: kb, parse_mode: "HTML" });
+    await ctx.editMessageText(html, {
+      parse_mode: "HTML",
+      // ВАЖНО: грамотно приводим InlineKeyboard -> InlineKeyboardMarkup
+      reply_markup: (kb as unknown as InlineKeyboardMarkup) || undefined,
+    });
   } catch (err: any) {
     const msg = String(err?.description || err?.message || "");
     if (!msg.includes("message is not modified")) {
@@ -89,11 +98,41 @@ async function safeEdit(
   }
 }
 
-/* ========= Создаём инстанс бота ========= */
-type LaunchableBot = GrammyBot<MyContext> & {
-  launch: () => Promise<void>;
-};
+/** Безопасный reply с parse_mode и клавой */
+function safeReply(ctx: MyContext, html: string, kb?: InlineKeyboard) {
+  return ctx.reply(html, {
+    parse_mode: "HTML",
+    reply_markup: (kb as unknown as InlineKeyboardMarkup) || undefined,
+  });
+}
 
+/** Создать или переиспользовать pending-платёж на доступ (не плодить дубли) */
+async function createOrReusePendingAccess(userId: Types.ObjectId, amount: number, currency: string, wallet: string) {
+  const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+  const existing = await TxHistory.findOne({
+    user: userId,
+    type: "ACCESS_PURCHASE",
+    status: "pending",
+    createdAt: { $gte: tenMinAgo },
+  }).sort({ createdAt: -1 });
+
+  if (existing) return existing;
+
+  const code12 = generate12DigitCode();
+  return TxHistory.create({
+    user: userId,
+    type: "ACCESS_PURCHASE",
+    status: "pending",
+    amount,
+    currency,
+    wallet,
+    code12,
+    meta: { reason: "buy_access" },
+  });
+}
+
+/* ========= Создаём инстанс бота ========= */
+type LaunchableBot = GrammyBot<MyContext> & { launch: () => Promise<void> };
 const bot = new GrammyBot<MyContext>(BOT_TOKEN) as unknown as LaunchableBot;
 
 // session
@@ -122,18 +161,52 @@ bot.command("start", async (ctx) => {
         hasAccess: false,
       });
 
-      // рефералка
+      // рефералка — привязываем только если есть валидный инвайтер и ещё не привязан
       if (payload) {
         const inviter = await User.findOne({ refCode: payload });
         if (inviter && inviter.tgId !== tg.id) {
-          user.invitedBy = inviter._id as unknown as Types.ObjectId;
+          if (!user.invitedBy) {
+            user.invitedBy = inviter._id as Types.ObjectId;
 
-          // прямые
-          inviter.referrals.push(user._id as unknown as Types.ObjectId);
+            // прямые
+            inviter.referrals.push(user._id as Types.ObjectId);
+            inviter.referralLevels.lvl1 += 1;
+            await inviter.save();
+
+            // уровни 2–5
+            let parent = inviter;
+            for (let level = 2; level <= 5; level++) {
+              if (!parent.invitedBy) break;
+              const up = await User.findById(parent.invitedBy);
+              if (!up) break;
+              (up.referralLevels as any)[`lvl${level}`] =
+                ((up.referralLevels as any)[`lvl${level}`] || 0) + 1;
+              await up.save();
+              parent = up;
+            }
+          }
+        }
+      }
+      await user.save();
+    } else {
+      // мягкий апдейт профиля (строго строки)
+      user.username  = baseProfile.username  || (user.username  ?? "");
+      user.firstName = baseProfile.firstName || (user.firstName ?? "");
+      user.lastName  = baseProfile.lastName  || (user.lastName  ?? "");
+      await user.save();
+
+      // если юзер уже создан, но пришёл с payload впервые и ещё не привязан — можно привязать 1 раз
+      if (payload && !user.invitedBy) {
+        const inviter = await User.findOne({ refCode: payload });
+        if (inviter && inviter.tgId !== tg.id) {
+          user.invitedBy = inviter._id as Types.ObjectId;
+          await user.save();
+
+          inviter.referrals.push(user._id as Types.ObjectId);
           inviter.referralLevels.lvl1 += 1;
           await inviter.save();
 
-          // уровни 2–5
+          // прокидываем уровни 2–5
           let parent = inviter;
           for (let level = 2; level <= 5; level++) {
             if (!parent.invitedBy) break;
@@ -146,22 +219,6 @@ bot.command("start", async (ctx) => {
           }
         }
       }
-      await user.save();
-    } else {
-      // апдейт профиля (строго строками — без union типов)
-      user.username =
-        baseProfile.username && baseProfile.username.length > 0
-          ? baseProfile.username
-          : (user.username ?? "");
-      user.firstName =
-        baseProfile.firstName && baseProfile.firstName.length > 0
-          ? baseProfile.firstName
-          : (user.firstName ?? "");
-      user.lastName =
-        baseProfile.lastName && baseProfile.lastName.length > 0
-          ? baseProfile.lastName
-          : (user.lastName ?? "");
-      await user.save();
     }
 
     const refLink = user.generateRefLink(MAIN_BOT_USERNAME);
@@ -172,7 +229,7 @@ bot.command("start", async (ctx) => {
       `• Ваша реферальная ссылка: <code>${refLink}</code>\n\n` +
       `Кнопка приложения ниже. Если доступа нет — внутри подскажем, как оплатить.`;
 
-    await ctx.reply(text, { reply_markup: kbMain(!!user.hasAccess), parse_mode: "HTML" });
+    await safeReply(ctx, text, kbMain(!!user.hasAccess));
   } catch (e) {
     console.error(e);
     await ctx.reply("Упс, что-то пошло не так. Попробуйте ещё раз.");
@@ -209,42 +266,36 @@ bot.callbackQuery("ref", async (ctx) => {
       `• Баланс: <b>${user.referralBalance.toFixed(2)}</b> ${ACCESS_CURRENCY}\n\n` +
       `<b>Ваши приглашённые (первые 20):</b>\n${refsList}`;
 
-    await safeEdit(ctx, text, kbMain(user.hasAccess));
+    await safeEdit(ctx, text, kbMain(!!user.hasAccess));
   } catch (e) {
     console.error(e);
     await ctx.answerCallbackQuery({ text: "Ошибка" });
   }
 });
 
-// Купить доступ
+// Купить доступ (создаём/переиспользуем pending)
 bot.callbackQuery("buy_access", async (ctx) => {
   try {
     const user = await User.findOne({ tgId: ctx.from!.id });
     if (!user) return ctx.answerCallbackQuery({ text: "Сначала /start" });
 
-    const code12 = generate12DigitCode();
-
-    await TxHistory.create({
-      user: user._id as unknown as Types.ObjectId,
-      type: "ACCESS_PURCHASE",
-      status: "pending",
-      amount: Number(ACCESS_PRICE),
-      currency: ACCESS_CURRENCY,
-      wallet: CRYPTO_WALLET,
-      code12,
-      meta: { reason: "buy_access" },
-    });
+    const tx = await createOrReusePendingAccess(
+      user._id as Types.ObjectId,
+      Number(ACCESS_PRICE),
+      ACCESS_CURRENCY,
+      CRYPTO_WALLET
+    );
 
     const text =
       `<b>Оплата доступа</b>\n\n` +
       `Сумма: <b>${ACCESS_PRICE} ${ACCESS_CURRENCY}</b>\n` +
       `Кошелёк: <code>${CRYPTO_WALLET}</code>\n` +
-      `Ваш 12-значный код: <code>${code12}</code>\n\n` +
+      `Ваш 12-значный код: <code>${tx.code12}</code>\n\n` +
       `⚠️ Обязательно укажите код в комментарии/мемо перевода.\n` +
       `После отправки нажмите «Проверить оплату» — проверка занимает до 10 минут.`;
 
     const kb = new InlineKeyboard()
-      .text("✅ Я оплатил — проверить", `check_access_${code12}`)
+      .text("✅ Я оплатил — проверить", `check_access_${tx.code12}`)
       .row()
       .url("📲 Открыть приложение", MINIAPP_URL)
       .row()
@@ -268,9 +319,7 @@ bot.callbackQuery(/^check_access_(\d{12})$/, async (ctx) => {
       user: user._id,
       code12: code,
       type: "ACCESS_PURCHASE",
-    })
-      .sort({ createdAt: -1 })
-      .exec();
+    }).sort({ createdAt: -1 });
 
     if (!tx) {
       await ctx.answerCallbackQuery({ text: "Платёж не найден", show_alert: true });
@@ -284,11 +333,7 @@ bot.callbackQuery(/^check_access_(\d{12})$/, async (ctx) => {
         await user.save();
       }
       await ctx.answerCallbackQuery({ text: "Оплата подтверждена!" });
-      await safeEdit(
-        ctx,
-        `🎉 Доступ активирован!\nТеперь можете пользоваться приложением.`,
-        kbMain(true)
-      );
+      await safeEdit(ctx, `🎉 Доступ активирован!\nТеперь можете пользоваться приложением.`, kbMain(true));
     } else if (tx.status === "pending") {
       await ctx.answerCallbackQuery({ text: "Оплата ещё в обработке…", show_alert: true });
     } else if (tx.status === "failed" || tx.status === "expired") {
@@ -306,19 +351,16 @@ bot.callbackQuery(/^check_access_(\d{12})$/, async (ctx) => {
 bot.on("message", async (ctx) => {
   const user = await User.findOne({ tgId: ctx.from!.id });
   const hasAccess = !!user?.hasAccess;
-  await ctx.reply("Главное меню:", { reply_markup: kbMain(hasAccess) });
+  await safeReply(ctx, "Главное меню:", kbMain(hasAccess));
 });
 
 /* ========= Добавляем совместимость с index.ts (launch/stop) ========= */
 bot.launch = async () => {
-  // твой index.ts ждёт метод .launch()
   await ensureMongo();
-  // В grammy это .start()
   await (bot as GrammyBot<MyContext>).start();
 };
 
 // stop уже есть у grammy, просто пробрасываем
-// (ничего доп. делать не надо)
 
 /* ========= Дефолтный экспорт ========= */
 export default bot;

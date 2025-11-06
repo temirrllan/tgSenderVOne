@@ -1,28 +1,23 @@
 // src/routes/admin.ts
 import express, { type Request, type Response, type Router, type NextFunction } from "express";
-import mongoose from "mongoose";
+import mongoose, { Types } from "mongoose";
 import authMiddleware from "../middlewares/authMiddleware.js";
 import { adminOnly } from "../middlewares/adminOnly.middleware.js";
+
 import { User } from "../common/mongo/Models/User.js";
 import { Bot } from "../common/mongo/Models/Bot.js";
-import type { BotStatus, IntervalKey } from "../common/mongo/Models/Bot.js";
-import { Types } from "mongoose"; // для ObjectId-кастов
-
-import logAdminAction from "../common/utils/logAdminAction.js";
-
+import type { BotStatus } from "../common/mongo/Models/Bot.js";
 import { Group } from "../common/mongo/Models/Group.js";
-
-
+import logAdminAction from "../common/utils/logAdminAction.js";
 
 const router: Router = express.Router();
 
 /* ──────────────────────────────────────────
-   Унифицированные ответы (единый формат)
+   Унифицированные ответы
    ────────────────────────────────────────── */
-function success(res: Response, data: unknown, status = 200, message = "success") {
+function success(res: Response, data: unknown, status = 200, message = "success sosal") {
   return res.status(status).json({ status, message, data });
 }
-
 function fail(res: Response, status = 400, message = "error") {
   return res.status(status).json({ status, message });
 }
@@ -79,16 +74,11 @@ router.get(
 router.post(
   "/users/:id",
   asyncWrap(async (req: Request, res: Response) => {
-    const id = req.params.id as string;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return fail(res, 400, "invalid_id");
-    }
+    const id = String(req.params.id ?? "");
+    if (!mongoose.isValidObjectId(id)) return fail(res, 400, "invalid_id");
 
     const user = await User.findById(id).lean().exec();
-    if (!user) {
-      return fail(res, 404, "user_not_found");
-    }
+    if (!user) return fail(res, 404, "user_not_found");
 
     const [botsCount, directReferrals] = await Promise.all([
       Bot.countDocuments({ owner: user._id }).exec(),
@@ -108,8 +98,8 @@ router.post(
 router.post(
   "/users/:id/block",
   asyncWrap(async (req: Request, res: Response) => {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "invalid_id");
+    const id = String(req.params.id ?? "");
+    if (!mongoose.isValidObjectId(id)) return fail(res, 400, "invalid_id");
 
     const user = await User.findById(id).exec();
     if (!user) return fail(res, 404, "user_not_found");
@@ -130,8 +120,8 @@ router.post(
 router.get(
   "/users/:id/unblock",
   asyncWrap(async (req: Request, res: Response) => {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "invalid_id");
+    const id = String(req.params.id ?? "");
+    if (!mongoose.isValidObjectId(id)) return fail(res, 400, "invalid_id");
 
     const user = await User.findById(id).exec();
     if (!user) return fail(res, 404, "user_not_found");
@@ -159,7 +149,7 @@ router.get(
     const ownerId = String(req.query.ownerId ?? "").trim();
 
     const q: Record<string, any> = {};
-    if (ownerId && mongoose.Types.ObjectId.isValid(ownerId)) q.owner = ownerId;
+    if (ownerId && mongoose.isValidObjectId(ownerId)) q.owner = ownerId;
     if (search) {
       q.$or = [
         { username: new RegExp(search, "i") },
@@ -190,8 +180,8 @@ router.post(
   "/bots/:id/update",
   express.json(),
   asyncWrap(async (req: Request, res: Response) => {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "invalid_id");
+    const id = String(req.params.id ?? "");
+    if (!mongoose.isValidObjectId(id)) return fail(res, 400, "invalid_id");
 
     const bot = await Bot.findById(id).exec();
     if (!bot) return fail(res, 404, "bot_not_found");
@@ -212,7 +202,6 @@ router.post(
     }
 
     if (typeof photoUrl !== "undefined") {
-      // как и у юзера: модель — string
       const val = photoUrl === null ? "" : String(photoUrl).trim();
       (bot as any).photoUrl = val;
     }
@@ -223,23 +212,22 @@ router.post(
       (bot as any).messageText = txt;
     }
 
-      if (typeof interval !== "undefined") {
+    if (typeof interval !== "undefined") {
       const allowed = [3600, 7200, 10800, 14400, 18000, 21600, 43200, 86400];
       const val = Number(interval);
       if (!allowed.includes(val)) return fail(res, 400, "bad_interval");
-      (bot as any).interval = val as any; // безопасное присвоение
+      (bot as any).interval = val as any;
     }
 
     if (typeof status !== "undefined") {
       const s = String(status);
       const allowedStatuses = ["active", "blocked", "deleted"];
       if (!allowedStatuses.includes(s)) return fail(res, 400, "bad_status");
-      (bot as any).status = s as any; // мягкое приведение
+      (bot as any).status = s as any;
     }
 
-
     if (typeof ownerId !== "undefined") {
-      if (!mongoose.Types.ObjectId.isValid(ownerId)) return fail(res, 400, "bad_ownerId");
+      if (!mongoose.isValidObjectId(ownerId)) return fail(res, 400, "bad_ownerId");
       const newOwner = await User.findById(ownerId).exec();
       if (!newOwner) return fail(res, 404, "owner_not_found");
 
@@ -271,13 +259,13 @@ router.post(
 
 /* ===============================
    7) POST /api/admin/bots/:id/block — блокировать бота
-   Идемпотентно: если уже blocked — вернём 200 "already_blocked"
-=============================== */
+   Идемпотентно: если уже blocked — 200 "already_blocked"
+   =============================== */
 router.post(
   "/bots/:id/block",
   asyncWrap(async (req, res) => {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "invalid_id");
+    const id = String(req.params.id ?? "");
+    if (!mongoose.isValidObjectId(id)) return fail(res, 400, "invalid_id");
 
     const bot = await Bot.findById(id).exec();
     if (!bot) return fail(res, 404, "bot_not_found");
@@ -296,12 +284,12 @@ router.post(
 /* ===============================
    8) POST /api/admin/bots/:id/unblock — разблокировать бота
    Идемпотентно: если уже active — 200 "already_active"
-=============================== */
+   =============================== */
 router.post(
   "/bots/:id/unblock",
   asyncWrap(async (req, res) => {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "invalid_id");
+    const id = String(req.params.id ?? "");
+    if (!mongoose.isValidObjectId(id)) return fail(res, 400, "invalid_id");
 
     const bot = await Bot.findById(id).exec();
     if (!bot) return fail(res, 404, "bot_not_found");
@@ -322,18 +310,17 @@ router.post(
    Логика:
      - ставим status="deleted"
      - убираем бота из массива owner.bots
-=============================== */
+   =============================== */
 router.post(
   "/bots/:id/delete",
   asyncWrap(async (req, res) => {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "invalid_id");
+    const id = String(req.params.id ?? "");
+    if (!mongoose.isValidObjectId(id)) return fail(res, 400, "invalid_id");
 
     const bot = await Bot.findById(id).exec();
     if (!bot) return fail(res, 404, "bot_not_found");
 
     if ((bot as any).status === "deleted") {
-      // уже удалён — считаем успехом (идемпотентность)
       return success(res, { _id: bot._id, status: (bot as any).status }, 200, "already_deleted");
     }
 
@@ -341,7 +328,6 @@ router.post(
     (bot as any).status = "deleted";
     await bot.save();
 
-    // вычистим ссылку у владельца
     if (ownerId) {
       const owner = await User.findById(ownerId).exec();
       if (owner) {
@@ -354,13 +340,15 @@ router.post(
   })
 );
 
-// POST /api/admin/bots/:id/groups/add
+/* ===============================
+   POST /api/admin/bots/:id/groups/add
+   =============================== */
 router.post(
   "/bots/:id/groups/add",
   express.json(),
   asyncWrap(async (req, res) => {
-    const botId = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(botId)) return fail(res, 400, "invalid_id");
+    const botId = String(req.params.id ?? "");
+    if (!mongoose.isValidObjectId(botId)) return fail(res, 400, "invalid_id");
 
     const { chatId, title } = req.body as { chatId?: string | number; title?: string };
     if (!chatId || !title) return fail(res, 400, "missing_fields");
@@ -375,7 +363,8 @@ router.post(
       { new: true, upsert: true }
     ).lean();
 
-    const before = (bot.groups?.length ?? 0);
+    const before = bot.groups?.length ?? 0;
+
     // если уже добавлена — не дублируем
     const already = (bot.groups ?? []).some((g: any) => String(g) === String(group._id));
     if (!already) {
@@ -403,14 +392,15 @@ router.post(
   })
 );
 
-
-// POST /api/admin/bots/:id/groups/delete
+/* ===============================
+   POST /api/admin/bots/:id/groups/delete
+   =============================== */
 router.post(
   "/bots/:id/groups/delete",
   express.json(),
   asyncWrap(async (req, res) => {
-    const botId = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(botId)) return fail(res, 400, "invalid_id");
+    const botId = String(req.params.id ?? "");
+    if (!mongoose.isValidObjectId(botId)) return fail(res, 400, "invalid_id");
 
     const { chatId } = req.body as { chatId?: string | number };
     if (!chatId) return fail(res, 400, "missing_chatId");
@@ -446,5 +436,72 @@ router.post(
   })
 );
 
+/* ===============================
+   10) POST /api/admin/bots/create — создать бота (вручную)
+   Body: { ownerId, username, messageText, interval, photoUrl?, status? }
+   =============================== */
+router.post(
+  "/bots/create",
+  express.json(),
+  asyncWrap(async (req: Request, res: Response) => {
+    const { ownerId, username, messageText, interval, photoUrl, status } = req.body as Partial<{
+      ownerId: string;
+      username: string;
+      messageText: string;
+      interval: number | string;
+      photoUrl: string | null;
+      status: BotStatus | string;
+    }>;
+
+    // валидация
+    if (!ownerId || !mongoose.isValidObjectId(ownerId)) return fail(res, 400, "bad_ownerId");
+    if (!username) return fail(res, 400, "bad_username");
+    if (!messageText) return fail(res, 400, "bad_messageText");
+    if (typeof interval === "undefined") return fail(res, 400, "bad_interval");
+
+    const owner = await User.findById(ownerId).exec();
+    if (!owner) return fail(res, 404, "owner_not_found");
+
+    const cleanUsername = String(username).replace(/^@/, "").trim();
+    if (!cleanUsername) return fail(res, 400, "bad_username");
+
+    const allowedIntervals = [3600, 7200, 10800, 14400, 18000, 21600, 43200, 86400]; // сек
+    const iv = Number(interval);
+    if (!allowedIntervals.includes(iv)) return fail(res, 400, "bad_interval");
+
+    // статус опционально
+    const s = status ? String(status) : "active";
+    const allowedStatuses = ["active", "blocked", "deleted"];
+    if (!allowedStatuses.includes(s)) return fail(res, 400, "bad_status");
+
+    // создаём
+    const bot = new Bot({
+      owner: owner._id,
+      username: cleanUsername,
+      photoUrl: photoUrl === null ? "" : (photoUrl ? String(photoUrl).trim() : ""),
+      messageText: String(messageText).trim(),
+      interval: iv as any,            // прошёл валидацию
+      status: s as any,               // прошёл валидацию
+      groups: [],
+      chats: [],
+    });
+
+    await bot.save();
+
+    // привяжем к владельцу
+    owner.bots = Array.isArray(owner.bots) ? owner.bots : [];
+    if (!owner.bots.some((bId) => String(bId) === String(bot._id))) {
+      owner.bots.push(bot._id as any);
+      await owner.save();
+    }
+
+    const dto = await Bot.findById(bot._id)
+      .select("owner username photoUrl messageText interval status groups createdAt")
+      .lean()
+      .exec();
+
+    return success(res, { bot: dto }, 201);
+  })
+);
 
 export default router;
