@@ -14,7 +14,7 @@ const NODE_ENV = process.env.NODE_ENV || "development";
 const BOT_TOKEN = process.env.BOT_TOKEN || "";
 const COMPANY_NAME = process.env.COMPANY_NAME || "Sender";
 const AUTH_COOKIE = process.env.AUTH_COOKIE || "token";
-const TG_INITDATA_MAX_AGE = Number(process.env.TG_INITDATA_MAX_AGE ?? 60);
+const TG_INITDATA_MAX_AGE = Number(process.env.TG_INITDATA_MAX_AGE ?? 60); // сек
 const JWT_SECRET: Secret = (process.env.JWT_SECRET ?? "change_me_secret") as Secret;
 
 type ExpiresIn = NonNullable<SignOptions["expiresIn"]>;
@@ -36,9 +36,18 @@ interface TelegramParsed {
   obj: Record<string, string>;
 }
 interface AuthBody {
-  initData?: string;
-  /** рефкод или tgId пригласителя */
-  ref?: string;
+  initData?: string;   // Telegram WebApp initData (raw string)
+  ref?: string;        // рефкод или tgId пригласителя (опц.)
+}
+
+/* ============================
+   COMMON RESPONSE HELPERS
+============================ */
+function success(res: Response, data: unknown, status = 200, message = "success sosal") {
+  return res.status(status).json({ status, message, data });
+}
+function fail(res: Response, status = 400, message = "error") {
+  return res.status(status).json({ status, message });
 }
 
 /* ============================
@@ -68,6 +77,7 @@ function verifyTelegramInitData(initData: string, botToken: string): TelegramPar
   if (sign !== hash) throw new Error("init_data_invalid");
 
   const authDate = Number(obj.auth_date || 0);
+  // age check in seconds
   if (!authDate || Math.abs(Date.now() / 1000 - authDate) > TG_INITDATA_MAX_AGE) {
     throw new Error("init_data_expired");
   }
@@ -93,7 +103,7 @@ function setAuthCookie(res: Response, token: string): void {
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
     path: "/",
-    maxAge: 30 * 24 * 60 * 60 * 1000,
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 дней
   });
 }
 
@@ -117,7 +127,6 @@ async function ensureDevUserAccount(): Promise<IUser> {
       firstName: "Dev",
       lastName: "User",
       hasAccess: true,
-      // refCode генерится в pre('validate') модели
     });
   }
   return user;
@@ -126,42 +135,51 @@ async function ensureDevUserAccount(): Promise<IUser> {
 /* ============================
    ROUTES
 ============================ */
+
+/**
+ * POST /api/auth/telegram
+ * Принимает initData из Telegram WebApp, валидирует подпись,
+ * создаёт/обновляет пользователя и возвращает JWT.
+ */
 router.post(
-  ["/auth/telegram", "/telegram"],
+  "/telegram",
   express.json(),
   async (req: Request<unknown, unknown, AuthBody>, res: Response) => {
     try {
       if (!BOT_TOKEN || !JWT_SECRET) {
-        return res.status(500).json({ ok: false, error: "server_misconfigured" });
+        return fail(res, 500, "server_misconfigured");
       }
 
       const { initData, ref } = req.body ?? {};
 
-      // DEV fallback
+      // DEV fallback без initData
       if (!initData) {
         if (NODE_ENV === "production") {
-          return res.status(400).json({ ok: false, error: "init_data_required" });
+          return fail(res, 400, "init_data_required");
         }
         const devUser = await ensureDevUserAccount();
         const devToken = issueToken(devUser);
         setAuthCookie(res, devToken);
-        return res.status(200).json({
-          ok: true,
-          token: devToken,
-          user: {
-            tgId: devUser.tgId,
-            username: devUser.username,
-            firstName: devUser.firstName,
-            lastName: devUser.lastName,
-            hasAccess: devUser.hasAccess,
-            refCode: devUser.refCode,
+        return success(
+          res,
+          {
+            token: devToken,
+            user: {
+              tgId: devUser.tgId,
+              username: devUser.username,
+              firstName: devUser.firstName,
+              lastName: devUser.lastName,
+              hasAccess: devUser.hasAccess,
+              refCode: devUser.refCode,
+            },
+            company: COMPANY_NAME,
+            dev: true,
           },
-          company: COMPANY_NAME,
-          dev: true,
-        });
+          200
+        );
       }
 
-      // Normal auth
+      // Нормальная авторизация через Telegram initData
       const parsed = verifyTelegramInitData(initData, BOT_TOKEN);
       const tg = parsed.user;
 
@@ -174,11 +192,12 @@ router.post(
         ).exec();
       }
 
-      // нормализуем ObjectId пригласителя для записи в invitedBy
+      // пригласитель (ObjectId)
       const inviterId: Types.ObjectId | undefined = inviter
         ? (inviter._id as unknown as Types.ObjectId)
         : undefined;
 
+      // создать/обновить пользователя
       let user = await User.findOne({ tgId: tg.id }).exec();
       if (user) {
         user.username = tg.username ?? user.username ?? "";
@@ -196,37 +215,39 @@ router.post(
           firstName: tg.first_name ?? "",
           lastName: tg.last_name ?? "",
           invitedBy: inviterId,
-          // refCode сгенерится автоматически в pre('validate') модели User
         });
       }
 
       const token = issueToken(user);
       setAuthCookie(res, token);
 
-      return res.status(200).json({
-        ok: true,
-        token,
-        user: {
-          tgId: user.tgId,
-          username: user.username,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          hasAccess: user.hasAccess,
-          refCode: user.refCode,
+      return success(
+        res,
+        {
+          token,
+          user: {
+            tgId: user.tgId,
+            username: user.username,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            hasAccess: user.hasAccess,
+            refCode: user.refCode,
+          },
+          company: COMPANY_NAME,
         },
-        company: COMPANY_NAME,
-      });
+        200
+      );
     } catch (err) {
       console.error("POST /api/auth/telegram error:", err);
-      return res.status(500).json({ ok: false, error: "internal_error" });
+      return fail(res, 400, "invalid_init_data");
     }
-  },
+  }
 );
 
-/** POST /auth/logout */
-router.post("/auth/logout", (_req: Request, res: Response) => {
+/** POST /api/auth/logout — сброс cookie */
+router.post("/logout", (_req: Request, res: Response) => {
   clearAuthCookie(res);
-  res.status(200).json({ ok: true });
+  return success(res, { ok: true }, 200);
 });
 
 export default router;
