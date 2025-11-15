@@ -8,6 +8,8 @@ import express, {
 } from "express";
 import mongoose, { Types } from "mongoose";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
+
 
 import { Group } from "../common/mongo/Models/Group.js";
 import { User, type IUser } from "../common/mongo/Models/User.js";
@@ -36,29 +38,125 @@ function generate12DigitCode(): string {
 }
 
 /* =========================================
-   AUTH MIDDLEWARE (JWT или x-tg-id в dev)
+   AUTH MIDDLEWARE (Telegram initData / JWT / x-tg-id)
    user кладётся в res.locals.user
 ========================================= */
 const authMiddleware: RequestHandler = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const authHeader = (req.header("authorization") || "").trim();
+    const xTg = (req.header("x-tg-id") || "").trim();
     const jwtSecret = process.env.JWT_SECRET;
     const isProd = (process.env.NODE_ENV || "development") === "production";
 
-    // 1) JWT Bearer
+    const botToken =
+      process.env.BOT_TOKEN ||
+      process.env.MAIN_BOT_TOKEN ||
+      process.env.TG_BOT_TOKEN ||
+      "";
+
+    /* ─────────────────────────────
+       0) Telegram WebApp initData (base64)
+       Authorization: <base64(initData)>
+       ───────────────────────────── */
+    if (authHeader && !authHeader.toLowerCase().startsWith("bearer ")) {
+      if (!botToken) {
+        console.error("authMiddleware: BOT_TOKEN not configured");
+        return fail(res, 500, "bot_token_not_configured");
+      }
+
+      try {
+        // 1. декодим base64 -> строка initData
+        const initDataStr = Buffer.from(authHeader, "base64").toString("utf8");
+
+        const params = new URLSearchParams(initDataStr);
+        const hash = params.get("hash");
+        if (!hash) return fail(res, 401, "no_hash");
+
+        // 2. проверяем срок жизни auth_date (опционально, 1 день)
+        const authDateStr = params.get("auth_date");
+        if (authDateStr) {
+          const authDate = Number(authDateStr);
+          const now = Math.floor(Date.now() / 1000);
+          const maxAge = 24 * 60 * 60; // 1 день
+          if (now - authDate > maxAge) {
+            return fail(res, 401, "auth_expired");
+          }
+        }
+
+        // 3. собираем data-check-string (все пары, кроме hash)
+        const data: string[] = [];
+        params.forEach((value, key) => {
+          if (key === "hash" || value === undefined || value === null) return;
+          data.push(`${key}=${value}`);
+        });
+        data.sort();
+        const dataCheckString = data.join("\n");
+
+        // 4. считаем HMAC по доке Telegram
+        const secretKey = crypto
+          .createHmac("sha256", "WebAppData")
+          .update(botToken)
+          .digest();
+
+        const computedHash = crypto
+          .createHmac("sha256", secretKey)
+          .update(dataCheckString)
+          .digest("hex");
+
+        const hashBuf = Buffer.from(hash, "hex");
+        const compBuf = Buffer.from(computedHash, "hex");
+
+        if (hashBuf.length !== compBuf.length || !crypto.timingSafeEqual(hashBuf, compBuf)) {
+          return fail(res, 401, "bad_signature");
+        }
+
+        // 5. достаём user из initData
+        const userJson = params.get("user");
+        if (!userJson) return fail(res, 401, "no_user");
+
+        let tgUser: any;
+        try {
+          tgUser = JSON.parse(userJson);
+        } catch {
+          return fail(res, 401, "bad_user_json");
+        }
+
+        const tgId = tgUser?.id;
+        if (!tgId) return fail(res, 401, "bad_user");
+
+        // 6. ищем пользователя в БД
+        const user = await User.findOne({ tgId }).exec();
+        if (!user) return fail(res, 401, "user_not_found");
+
+        res.locals.user = user;
+        return next();
+      } catch (e) {
+        console.error("authMiddleware Telegram initData error", e);
+        return fail(res, 401, "bad_auth");
+      }
+    }
+
+    /* ─────────────────────────────
+       1) JWT Bearer (старый вариант, если понадобится)
+       Authorization: Bearer <jwt>
+       ───────────────────────────── */
     if (authHeader.toLowerCase().startsWith("bearer ")) {
       const token = authHeader.slice(7).trim();
       if (!jwtSecret) return fail(res, 500, "server_misconfigured");
 
       try {
-        const decoded = jwt.verify(token, jwtSecret) as { sub?: string; tgId?: number | string };
+        const decoded = jwt.verify(token, jwtSecret) as {
+          sub?: string;
+          tgId?: number | string;
+        };
         let user: IUser | null = null;
 
         if (decoded?.sub && mongoose.Types.ObjectId.isValid(String(decoded.sub))) {
           user = await User.findById(decoded.sub).exec();
         }
         if (!user && typeof decoded?.tgId !== "undefined") {
-          const tgId = /^\d+$/.test(String(decoded.tgId)) ? Number(decoded.tgId) : String(decoded.tgId);
+          const tgId =
+            /^\d+$/.test(String(decoded.tgId)) ? Number(decoded.tgId) : String(decoded.tgId);
           user = await User.findOne({ tgId }).exec();
         }
 
@@ -66,21 +164,21 @@ const authMiddleware: RequestHandler = async (req: Request, res: Response, next:
           res.locals.user = user;
           return next();
         }
-      } catch {
-        /* fallthrough */
+      } catch (err) {
+        console.warn("authMiddleware: JWT verify failed", err);
+        // пойдём дальше в dev-фолбек
       }
     }
 
-    // 2) Dev fallback
-    if (!isProd) {
-      const xTg = (req.header("x-tg-id") || "").trim();
-      if (xTg) {
-        const tgId = /^\d+$/.test(xTg) ? Number(xTg) : xTg;
-        const user = await User.findOne({ tgId }).exec();
-        if (user) {
-          res.locals.user = user;
-          return next();
-        }
+    /* ─────────────────────────────
+       2) Dev fallback по x-tg-id
+       ───────────────────────────── */
+    if (!isProd && xTg) {
+      const tgId = /^\d+$/.test(xTg) ? Number(xTg) : xTg;
+      const user = await User.findOne({ tgId }).exec();
+      if (user) {
+        res.locals.user = user;
+        return next();
       }
     }
 
@@ -90,6 +188,7 @@ const authMiddleware: RequestHandler = async (req: Request, res: Response, next:
     return fail(res, 500, "internal_error");
   }
 };
+
 
 /* =========================================
    GET /api/me — профиль пользователя (mini-app)
