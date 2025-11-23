@@ -7,8 +7,7 @@ import express, {
   type Router,
 } from "express";
 import mongoose, { Types } from "mongoose";
-import jwt from "jsonwebtoken";
-import crypto from "crypto";
+import qs from "qs";
 
 
 import { Group } from "../common/mongo/Models/Group.js";
@@ -38,154 +37,82 @@ function generate12DigitCode(): string {
 }
 
 /* =========================================
-   AUTH MIDDLEWARE (Telegram initData / JWT / x-tg-id)
-   user кладётся в res.locals.user
+   ПРОСТОЙ AUTH MIDDLEWARE как у начальника
+   Authorization: base64(initData)
+   - декодим initData
+   - парсим через qs
+   - достаём user.id (tgId)
+   - ищем юзера в БД
+   - кладём в res.locals.user
 ========================================= */
 const authMiddleware: RequestHandler = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const authHeader = (req.header("authorization") || "").trim();
-    const xTg = (req.header("x-tg-id") || "").trim();
-    const jwtSecret = process.env.JWT_SECRET;
-    const isProd = (process.env.NODE_ENV || "development") === "production";
+    const authB64 = (req.headers.authorization || "").toString().trim();
 
-    const botToken =
-      process.env.BOT_TOKEN ||
-      process.env.MAIN_BOT_TOKEN ||
-      process.env.TG_BOT_TOKEN ||
-      "";
+    if (!authB64) {
+      return res.status(401).json({
+        success: false,
+        data: { message: "Unauthorized" },
+      });
+    }
 
-    /* ─────────────────────────────
-       0) Telegram WebApp initData (base64)
-       Authorization: <base64(initData)>
-       ───────────────────────────── */
-    if (authHeader && !authHeader.toLowerCase().startsWith("bearer ")) {
-      if (!botToken) {
-        console.error("authMiddleware: BOT_TOKEN not configured");
-        return fail(res, 500, "bot_token_not_configured");
-      }
+    // 1) base64 -> строка initData
+    const initDataStr = Buffer.from(authB64, "base64").toString("utf-8");
 
+    // 2) парсим initData в объект
+    const tgData: any = qs.parse(initDataStr);
+
+    // чтобы при желании можно было достать всё сырьё
+    (req as any).tgData = tgData;
+
+    if (!tgData.user) {
+      return res.status(401).json({
+        success: false,
+        data: { message: "Unauthorized" },
+      });
+    }
+
+    // 3) user внутри initData может быть строкой JSON или уже объектом
+    let tgUser: any;
+    if (typeof tgData.user === "string") {
       try {
-        // 1. декодим base64 -> строка initData
-        const initDataStr = Buffer.from(authHeader, "base64").toString("utf8");
-
-        const params = new URLSearchParams(initDataStr);
-        const hash = params.get("hash");
-        if (!hash) return fail(res, 401, "no_hash");
-
-        // 2. проверяем срок жизни auth_date (опционально, 1 день)
-        const authDateStr = params.get("auth_date");
-        if (authDateStr) {
-          const authDate = Number(authDateStr);
-          const now = Math.floor(Date.now() / 1000);
-          const maxAge = 24 * 60 * 60; // 1 день
-          if (now - authDate > maxAge) {
-            return fail(res, 401, "auth_expired");
-          }
-        }
-
-        // 3. собираем data-check-string (все пары, кроме hash)
-        const data: string[] = [];
-        params.forEach((value, key) => {
-          if (key === "hash" || value === undefined || value === null) return;
-          data.push(`${key}=${value}`);
+        tgUser = JSON.parse(tgData.user);
+      } catch {
+        return res.status(401).json({
+          success: false,
+          data: { message: "Bad user json" },
         });
-        data.sort();
-        const dataCheckString = data.join("\n");
-
-        // 4. считаем HMAC по доке Telegram
-        const secretKey = crypto
-          .createHmac("sha256", "WebAppData")
-          .update(botToken)
-          .digest();
-
-        const computedHash = crypto
-          .createHmac("sha256", secretKey)
-          .update(dataCheckString)
-          .digest("hex");
-
-        const hashBuf = Buffer.from(hash, "hex");
-        const compBuf = Buffer.from(computedHash, "hex");
-
-        if (hashBuf.length !== compBuf.length || !crypto.timingSafeEqual(hashBuf, compBuf)) {
-          return fail(res, 401, "bad_signature");
-        }
-
-        // 5. достаём user из initData
-        const userJson = params.get("user");
-        if (!userJson) return fail(res, 401, "no_user");
-
-        let tgUser: any;
-        try {
-          tgUser = JSON.parse(userJson);
-        } catch {
-          return fail(res, 401, "bad_user_json");
-        }
-
-        const tgId = tgUser?.id;
-        if (!tgId) return fail(res, 401, "bad_user");
-
-        // 6. ищем пользователя в БД
-        const user = await User.findOne({ tgId }).exec();
-        if (!user) return fail(res, 401, "user_not_found");
-
-        res.locals.user = user;
-        return next();
-      } catch (e) {
-        console.error("authMiddleware Telegram initData error", e);
-        return fail(res, 401, "bad_auth");
       }
+    } else {
+      tgUser = tgData.user;
     }
 
-    /* ─────────────────────────────
-       1) JWT Bearer (старый вариант, если понадобится)
-       Authorization: Bearer <jwt>
-       ───────────────────────────── */
-    if (authHeader.toLowerCase().startsWith("bearer ")) {
-      const token = authHeader.slice(7).trim();
-      if (!jwtSecret) return fail(res, 500, "server_misconfigured");
-
-      try {
-        const decoded = jwt.verify(token, jwtSecret) as {
-          sub?: string;
-          tgId?: number | string;
-        };
-        let user: IUser | null = null;
-
-        if (decoded?.sub && mongoose.Types.ObjectId.isValid(String(decoded.sub))) {
-          user = await User.findById(decoded.sub).exec();
-        }
-        if (!user && typeof decoded?.tgId !== "undefined") {
-          const tgId =
-            /^\d+$/.test(String(decoded.tgId)) ? Number(decoded.tgId) : String(decoded.tgId);
-          user = await User.findOne({ tgId }).exec();
-        }
-
-        if (user) {
-          res.locals.user = user;
-          return next();
-        }
-      } catch (err) {
-        console.warn("authMiddleware: JWT verify failed", err);
-        // пойдём дальше в dev-фолбек
-      }
+    const tgId = tgUser?.id;
+    if (!tgId) {
+      return res.status(401).json({
+        success: false,
+        data: { message: "Bad user data" },
+      });
     }
 
-    /* ─────────────────────────────
-       2) Dev fallback по x-tg-id
-       ───────────────────────────── */
-    if (!isProd && xTg) {
-      const tgId = /^\d+$/.test(xTg) ? Number(xTg) : xTg;
-      const user = await User.findOne({ tgId }).exec();
-      if (user) {
-        res.locals.user = user;
-        return next();
-      }
+    // 4) ищем пользователя в БД
+    const user = await User.findOne({ tgId }).exec();
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        data: { message: "User not found" },
+      });
     }
 
-    return fail(res, 401, "no_auth");
-  } catch (err) {
-    console.error("authMiddleware error", err);
-    return fail(res, 500, "internal_error");
+    // 5) кладём в res.locals.user и пускаем дальше
+    res.locals.user = user;
+    return next();
+  } catch (error) {
+    console.error("authMiddleware error", error);
+    return res.status(500).json({
+      success: false,
+      data: { message: "Internal server error" },
+    });
   }
 };
 
@@ -621,10 +548,10 @@ router.post("/bots/:id/groups/delete", authMiddleware, express.json(), async (re
 });
 
 /* =========================================
-   POST /api/bots/create — создать покупку бота (user flow)
+   POST /api/bots/create-payment — создать покупку бота (user flow)
    Валидируем поля, создаём TxHistory (pending), отдаём кошелёк+код
 ========================================= */
-router.post("/bots/create", authMiddleware, express.json(), async (req, res) => {
+router.post("/bots/create-payment", authMiddleware, express.json(), async (req, res) => {
   try {
     const me = res.locals.user as IUser | undefined;
     if (!me) return fail(res, 401, "no_auth");
@@ -652,7 +579,6 @@ router.post("/bots/create", authMiddleware, express.json(), async (req, res) => 
     const CRYPTO_WALLET = process.env.CRYPTO_WALLET || process.env.CRYPTO_WALLET_BOT || "";
     if (!CRYPTO_WALLET) return fail(res, 500, "wallet_not_configured");
 
-    // Генерим код и создаём pending-транзакцию
     const code12 = generate12DigitCode();
     const tx = await TxHistory.create({
       user: me._id as unknown as Types.ObjectId,
@@ -672,7 +598,6 @@ router.post("/bots/create", authMiddleware, express.json(), async (req, res) => 
       },
     });
 
-    // фронту — только безопасные поля
     return success(
       res,
       {
@@ -681,16 +606,119 @@ router.post("/bots/create", authMiddleware, express.json(), async (req, res) => 
         code12,
         amount: BOT_PRICE,
         currency: BOT_CURRENCY,
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000), // подсказка фронту
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
         note: "Укажите 12-значный код в комментарии/мемо перевода. Проверка может занять до 10 минут.",
       },
       201
     );
   } catch (err) {
-    console.error("POST /api/bots/create error", err);
+    console.error("POST /api/bots/create-payment error", err);
     return fail(res, 500, "internal_error");
   }
 });
+
+
+/* =========================================
+   POST /api/bots/create-from-tx/:txId
+   Создать бота по записи TxHistory (BOT_PURCHASE)
+========================================= */
+router.post("/bots/create-from-tx/:txId", authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const me = res.locals.user as IUser | undefined;
+    if (!me) return fail(res, 401, "no_auth");
+
+    const txId = String(req.params.txId ?? "");
+    if (!mongoose.isValidObjectId(txId)) return fail(res, 400, "invalid_tx_id");
+
+    const tx = await TxHistory.findById(txId).exec();
+    if (!tx) return fail(res, 404, "tx_not_found");
+
+    // транзакция должна принадлежать текущему пользователю
+    if (String(tx.user) !== String(me._id)) {
+      return fail(res, 403, "forbidden");
+    }
+
+    // только покупки бота
+    if (tx.type !== "BOT_PURCHASE") {
+      return fail(res, 400, "wrong_tx_type");
+    }
+
+    // если уже привязан бот — просто отдаём его
+    if (tx.bot) {
+      const existingBot = await Bot.findById(tx.bot)
+        .select("owner username photoUrl messageText interval status groups createdAt")
+        .lean()
+        .exec();
+      return success(res, { bot: existingBot, txId: tx._id, reused: true });
+    }
+
+    // DEV-ЛОГИКА:
+    // пока нет реальной проверки блокчейна — если pending, считаем что оплата прошла
+    if (tx.status === "pending") {
+      await tx.markConfirmed(); // метод из модели TxHistory
+    }
+
+    if (tx.status !== "confirmed") {
+      return fail(res, 400, "tx_not_confirmed");
+    }
+
+    const metaReq = (tx.meta?.request ?? {}) as any;
+    const cleanUsername = String(metaReq.username || "").replace(/^@/, "").trim();
+    const messageText = String(metaReq.messageText || "").trim();
+    const interval = Number(metaReq.interval || 0);
+    const photoUrl =
+      metaReq.photoUrl === null
+        ? ""
+        : metaReq.photoUrl
+        ? String(metaReq.photoUrl).trim()
+        : "";
+
+    if (!cleanUsername) return fail(res, 400, "bad_username_in_meta");
+    if (!messageText) return fail(res, 400, "bad_messageText_in_meta");
+
+    const allowed = [3600, 7200, 10800, 14400, 18000, 21600, 43200, 86400];
+    if (!allowed.includes(interval)) return fail(res, 400, "bad_interval_in_meta");
+
+    // создаём бота
+    const bot = await Bot.create({
+      owner: me._id as any,
+      username: cleanUsername,
+      photoUrl,
+      messageText,
+      interval,
+      status: "active",
+      groups: [],
+      chats: [],
+      sentCount: 0,
+      errorCount: 0,
+    });
+
+    // привяжем бота к пользователю
+    const freshUser = await User.findById(me._id).exec();
+    if (freshUser) {
+      freshUser.bots = Array.isArray(freshUser.bots) ? freshUser.bots : [];
+      if (!freshUser.bots.some((bId) => String(bId) === String(bot._id))) {
+        freshUser.bots.push(bot._id as any);
+      }
+      await freshUser.save();
+    }
+
+    // привяжем бота к транзакции
+    tx.bot = bot._id as any;
+    await tx.save();
+
+    const dto = await Bot.findById(bot._id)
+      .select("owner username photoUrl messageText interval status groups createdAt")
+      .lean()
+      .exec();
+
+    return success(res, { bot: dto, txId: tx._id }, 201);
+  } catch (err) {
+    console.error("POST /api/bots/create-from-tx/:txId error", err);
+    return fail(res, 500, "internal_error");
+  }
+});
+
 
 /* =========================================
    11) POST /api/bots/:id/block — заблокировать бота (владелец/админ)

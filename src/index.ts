@@ -34,6 +34,7 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 /* -- Настройки middlewares -- */
 app.use(helmet()); // базовые безопасные заголовки
 
+
 // CORS: по умолчанию разрешаем всё в dev, но можно указать FRONTEND_URL в .env
 const FRONTEND_URL = process.env.FRONTEND_URL || "";
 if (FRONTEND_URL) {

@@ -1,28 +1,29 @@
+// src/common/mongo/Models/Bot.ts
 import { Schema, model, Types, Document } from "mongoose";
 
 export type BotStatus =
   | "awaiting_payment"   // создан, но еще не оплачен
   | "active"             // работает и рассылает
-  | "paused"             // временно остановлен владельцем/админом
-  | "stopped";           // завершен/удален
-
-export type IntervalKey = "1h"|"2h"|"3h"|"4h"|"5h"|"6h"|"12h"|"24h";
+  | "blocked"            // заблокирован
+  | "deleted";           // мягкое удаление
 
 export interface IBot extends Document {
-  owner: Types.ObjectId;             // User
-  username: string;                  // @username рассыльщика (по ТЗ)
+  owner: Types.ObjectId;   // User
+  username: string;        // @username рассыльщика
   photoUrl?: string;
   messageText: string;
-  interval: IntervalKey;
+
+  // интервал в СЕКУНДАХ (3600, 7200, ... как в API)
+  interval: number;
 
   status: BotStatus;
-  chats: number[];                   // id чатов/каналов в Telegram, где бот работает
-  groups?: Types.ObjectId[];         // ссылки на Group документы (для админки/аналитики)
+
+  chats: number[];         // id чатов/каналов в Telegram, где бот работает
+  groups?: Types.ObjectId[];
 
   lastRunAt?: Date;
   nextRunAt?: Date;
 
-  // для счетчиков/аналитики
   sentCount: number;
   errorCount: number;
 
@@ -36,9 +37,17 @@ const BotSchema = new Schema<IBot>(
     username: { type: String, required: true, trim: true, index: true },
     photoUrl: String,
     messageText: { type: String, required: true },
-    interval: { type: String, enum: ["1h","2h","3h","4h","5h","6h","12h","24h"], required: true },
 
-    status: { type: String, enum: ["awaiting_payment","active","paused","stopped"], default: "awaiting_payment", index: true },
+    // интервал рассылки в секундах
+    interval: { type: Number, required: true },
+
+    status: {
+      type: String,
+      enum: ["awaiting_payment", "active", "blocked", "deleted"],
+      default: "awaiting_payment",
+      index: true,
+    },
+
     chats: { type: [Number], default: [] },
     groups: [{ type: Schema.Types.ObjectId, ref: "Group" }],
 
@@ -52,6 +61,6 @@ const BotSchema = new Schema<IBot>(
 );
 
 BotSchema.index({ owner: 1, status: 1 });
-BotSchema.index({ nextRunAt: 1 }); // планировщик рассылок
+BotSchema.index({ nextRunAt: 1 });
 
 export const Bot = model<IBot>("Bot", BotSchema);
