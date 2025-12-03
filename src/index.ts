@@ -1,107 +1,148 @@
 // src/index.ts
 import express from "express";
 import cookieParser from "cookie-parser";
-import cors from "cors";
+// import cors from "cors"; // не нужен, CORS делаем вручную
 import engine from "ejs-mate";
 import path from "path";
 import mongoose from "mongoose";
-import cron from "node-cron";
 import dotenv from "dotenv";
 import morgan from "morgan";
 import helmet from "helmet";
 
 import bot from "./tgBot/bot.js";
 import router from "./routes/router.js";
+import apiRouter from "./routes/api.js"; // API роуты
 
 dotenv.config();
 
 const app = express();
-// PORT может быть строкой в env — приводим к number
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 /**
- * ------------------------
- *  Изменения и пояснения
- * ------------------------
- * 2) Добавил morgan для логирования HTTP-запросов (удобно при разработке).
- * 3) Добавил helmet — базовые заголовки безопасности.
- * 4) Добавил CORS с возможностью задать FRONTEND_URL в .env (для dev/прод).
- * 5) Включил централизованный обработчик ошибок для express.
- * 6) Корректный graceful shutdown: останавливаем бот и закрываем соединение с Mongo.
- * 7) Немного переструктурировал порядок middlewares (json/urlencoded/ статические файлы и т.д.).
+ * -----------------------------------
+ *  🛑 CORS — СТАВИМ ПЕРВЫМ!
+ * -----------------------------------
  */
+app.use((req, res, next) => {
+  console.log("CORS middleware:", req.method, req.path);
 
-/* -- Настройки middlewares -- */
-app.use(helmet()); // базовые безопасные заголовки
-
-
-// CORS: по умолчанию разрешаем всё в dev, но можно указать FRONTEND_URL в .env
-const FRONTEND_URL = process.env.FRONTEND_URL || "";
-if (FRONTEND_URL) {
-  app.use(
-    cors({
-      // origin: FRONTEND_URL,
-      credentials: true,
-    })
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS"
   );
-} else {
-  // dev fallback — разрешаем всё (можно сузить)
-  app.use(cors());
-}
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, ngrok-skip-browser-warning"
+  );
 
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+
+  next();
+});
+
+
+/**
+ * -----------------------------------
+ *  Общие middleware
+ * -----------------------------------
+ */
+app.use(helmet());
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static("public"));
 
-/* -- View engine (admin pages) -- */
+/**
+ * -----------------------------------
+ *  View engine (EJS)
+ * -----------------------------------
+ */
 app.engine("ejs", engine);
 app.set("view engine", "ejs");
 app.set("views", path.resolve("views"));
 
-/* -- MongoDB connection -- */
+/**
+ * -----------------------------------
+ *  MongoDB connection
+ * -----------------------------------
+ */
 const uri = process.env.MONGO_URI || "";
 if (!uri) {
-  console.error("MONGO_URI is not defined in the environment variables!");
+  console.error("❌ MONGO_URI is not defined in env!");
   process.exit(1);
 }
 
 async function connectToDatabase() {
   try {
     await mongoose.connect(uri, { dbName: "sendingBot" });
-    console.log("Connected to db");
+    console.log("✅ Connected to DB");
   } catch (err) {
-    console.error("Error connecting to the database:", err);
+    console.error("❌ DB connection error:", err);
     throw err;
   }
 }
 connectToDatabase();
 
-/* -- Router mount (api + admin and so on) -- */
+/**
+ * -----------------------------------
+ *  API РОУТЫ — СТАВИМ ПЕРЕД ОСНОВНЫМИ
+ * -----------------------------------
+ */
+
+// Лог, чтобы убедиться, что API работает
+app.use("/api", (req, _res, next) => {
+  console.log("🔥 API HIT:", req.method, req.originalUrl);
+  next();
+});
+
+// Подключаем твой API
+app.use("/api", apiRouter);
+
+/**
+ * -----------------------------------
+ *  Основные роуты сайта / админка
+ * -----------------------------------
+ */
 app.use("/", router);
 
-/* -- Health check (полезно для k8s / мониторинга) -- */
+/**
+ * -----------------------------------
+ *  Health-check
+ * -----------------------------------
+ */
 app.get("/health", (req, res) => {
-  return res.status(200).json({ ok: true, uptime: process.uptime() });
+  res.status(200).json({ ok: true, uptime: process.uptime() });
 });
 
-/* -- Central error handler (express) -- */
+/**
+ * -----------------------------------
+ *  CENTRAL ERROR HANDLER
+ * -----------------------------------
+ */
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error("Unhandled express error:", err);
+  console.error("❌ Unhandled express error:", err);
   if (res.headersSent) return next(err);
-  res.status(err.status || 500).json({ error: "internal_error", message: err.message || String(err) });
+  res.status(err.status || 500).json({
+    error: "internal_error",
+    message: err.message || String(err),
+  });
 });
 
-/* -- Graceful shutdown helpers -- */
+/**
+ * -----------------------------------
+ *  START SERVER
+ * -----------------------------------
+ */
 let serverInstance: any = null;
 
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
   serverInstance = app;
 });
 
-bot.launch().then(() => {
-  console.log("Telegram bot started");
-});
+// Telegram Bot launcher
+bot.launch().then(() => console.log("🤖 Telegram bot started"));

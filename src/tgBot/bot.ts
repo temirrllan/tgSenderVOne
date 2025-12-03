@@ -3,10 +3,7 @@ import "dotenv/config";
 import { Bot as GrammyBot, Context, InlineKeyboard, session } from "grammy";
 import type { SessionFlavor } from "grammy";
 import mongoose, { Types } from "mongoose";
-
 import type { InlineKeyboardMarkup } from "grammy/types";
-
-
 
 // Модели
 import { User } from "../common/mongo/Models/User.js";
@@ -34,9 +31,9 @@ const MAIN_BOT_USERNAME = readUsername();
 const MONGO_URL = process.env.MONGO_URL || process.env.MONGO_URI || "";
 if (!MONGO_URL) throw new Error("MONGO_URL (или MONGO_URI) is required");
 
-const CRYPTO_WALLET   = must("CRYPTO_WALLET");
-const MINIAPP_URL     = must("MINIAPP_URL");
-const ACCESS_PRICE    = process.env.ACCESS_PRICE ?? "10";
+const CRYPTO_WALLET = must("CRYPTO_WALLET");
+const MINIAPP_URL = must("MINIAPP_URL");
+const ACCESS_PRICE = process.env.ACCESS_PRICE ?? "10";
 const ACCESS_CURRENCY = process.env.ACCESS_CURRENCY ?? "USDT";
 
 /* ========= Session ========= */
@@ -76,6 +73,51 @@ async function ensureMongo() {
   }
 }
 
+/**
+ * Тянем аватар юзера из Telegram и сохраняем в user.avatarUrl, если там пусто
+ */
+async function ensureUserAvatar(user: any, ctx: MyContext) {
+  try {
+    if (user.avatarUrl && typeof user.avatarUrl === "string") return;
+
+    const tg = ctx.from;
+    if (!tg) return;
+
+    const photos = await ctx.api.getUserProfilePhotos(tg.id, { limit: 1 });
+
+    // безопасные проверки
+    if (
+      !photos ||
+      typeof photos.total_count !== "number" ||
+      photos.total_count === 0 ||
+      !Array.isArray(photos.photos) ||
+      photos.photos.length === 0 ||
+      !Array.isArray(photos.photos[0]) ||
+      photos.photos[0].length === 0
+    ) {
+      return;
+    }
+
+    // TS: точно не undefined
+    const firstSize = (photos.photos[0][0])!;
+    if (!firstSize.file_id) return;
+
+    const file = await ctx.api.getFile(firstSize.file_id);
+    if (!file?.file_path) return;
+
+    const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+
+    user.avatarUrl = url;
+    await user.save();
+
+
+    console.log("Saved avatarUrl for user", user.tgId, url);
+  } catch (err) {
+    console.error("ensureUserAvatar error:", err);
+  }
+}
+
+
 /** Аккуратное редактирование: глушим 400 "message is not modified" */
 async function safeEdit(
   ctx: MyContext,
@@ -107,7 +149,12 @@ function safeReply(ctx: MyContext, html: string, kb?: InlineKeyboard) {
 }
 
 /** Создать или переиспользовать pending-платёж на доступ (не плодить дубли) */
-async function createOrReusePendingAccess(userId: Types.ObjectId, amount: number, currency: string, wallet: string) {
+async function createOrReusePendingAccess(
+  userId: Types.ObjectId,
+  amount: number,
+  currency: string,
+  wallet: string
+) {
   const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
   const existing = await TxHistory.findOne({
     user: userId,
@@ -143,6 +190,8 @@ bot.use(session({ initial: initialSession }));
 // /start (+payload refCode)
 bot.command("start", async (ctx) => {
   try {
+    await ensureMongo();
+
     const payload = (ctx.match ?? "").trim(); // реф-код
     const tg = ctx.from!;
     let user = await User.findOne({ tgId: tg.id });
@@ -190,9 +239,9 @@ bot.command("start", async (ctx) => {
       await user.save();
     } else {
       // мягкий апдейт профиля (строго строки)
-      user.username  = baseProfile.username  || (user.username  ?? "");
+      user.username = baseProfile.username || (user.username ?? "");
       user.firstName = baseProfile.firstName || (user.firstName ?? "");
-      user.lastName  = baseProfile.lastName  || (user.lastName  ?? "");
+      user.lastName = baseProfile.lastName || (user.lastName ?? "");
       await user.save();
 
       // если юзер уже создан, но пришёл с payload впервые и ещё не привязан — можно привязать 1 раз
@@ -221,6 +270,9 @@ bot.command("start", async (ctx) => {
       }
     }
 
+    // ✅ здесь тянем фотку и сохраняем avatarUrl, если его ещё нет
+    await ensureUserAvatar(user, ctx);
+
     const refLink = user.generateRefLink(MAIN_BOT_USERNAME);
     const text =
       `Привет, <b>${tg.first_name || "друг"}</b> 👋\n` +
@@ -243,13 +295,19 @@ bot.callbackQuery("ref", async (ctx) => {
     if (!user) return ctx.answerCallbackQuery({ text: "Сначала /start" });
 
     const refLink = user.generateRefLink(MAIN_BOT_USERNAME);
-    const refs = await User.find({ invitedBy: user._id }).select("username firstName tgId");
+    const refs = await User.find({ invitedBy: user._id }).select(
+      "username firstName tgId"
+    );
     const refsList =
       refs.length === 0
         ? "— пока нет"
         : refs
             .slice(0, 20)
-            .map((r, i) => `${i + 1}. ${r.username ? "@" + r.username : r.firstName || r.tgId}`)
+            .map((r, i) =>
+              `${i + 1}. ${
+                r.username ? "@" + r.username : r.firstName || r.tgId
+              }`
+            )
             .join("\n");
 
     const text =
@@ -263,7 +321,9 @@ bot.callbackQuery("ref", async (ctx) => {
       `• Уровень 3: ${user.referralLevels.lvl3}\n` +
       `• Уровень 4: ${user.referralLevels.lvl4}\n` +
       `• Уровень 5: ${user.referralLevels.lvl5}\n` +
-      `• Баланс: <b>${user.referralBalance.toFixed(2)}</b> ${ACCESS_CURRENCY}\n\n` +
+      `• Баланс: <b>${user.referralBalance.toFixed(
+        2
+      )}</b> ${ACCESS_CURRENCY}\n\n` +
       `<b>Ваши приглашённые (первые 20):</b>\n${refsList}`;
 
     await safeEdit(ctx, text, kbMain(!!user.hasAccess));
@@ -322,7 +382,10 @@ bot.callbackQuery(/^check_access_(\d{12})$/, async (ctx) => {
     }).sort({ createdAt: -1 });
 
     if (!tx) {
-      await ctx.answerCallbackQuery({ text: "Платёж не найден", show_alert: true });
+      await ctx.answerCallbackQuery({
+        text: "Платёж не найден",
+        show_alert: true,
+      });
       return;
     }
 
@@ -333,13 +396,26 @@ bot.callbackQuery(/^check_access_(\d{12})$/, async (ctx) => {
         await user.save();
       }
       await ctx.answerCallbackQuery({ text: "Оплата подтверждена!" });
-      await safeEdit(ctx, `🎉 Доступ активирован!\nТеперь можете пользоваться приложением.`, kbMain(true));
+      await safeEdit(
+        ctx,
+        `🎉 Доступ активирован!\nТеперь можете пользоваться приложением.`,
+        kbMain(true)
+      );
     } else if (tx.status === "pending") {
-      await ctx.answerCallbackQuery({ text: "Оплата ещё в обработке…", show_alert: true });
+      await ctx.answerCallbackQuery({
+        text: "Оплата ещё в обработке…",
+        show_alert: true,
+      });
     } else if (tx.status === "failed" || tx.status === "expired") {
-      await ctx.answerCallbackQuery({ text: "Оплата не прошла", show_alert: true });
+      await ctx.answerCallbackQuery({
+        text: "Оплата не прошла",
+        show_alert: true,
+      });
     } else {
-      await ctx.answerCallbackQuery({ text: "Статус неизвестен", show_alert: true });
+      await ctx.answerCallbackQuery({
+        text: "Статус неизвестен",
+        show_alert: true,
+      });
     }
   } catch (e) {
     console.error(e);
@@ -359,8 +435,6 @@ bot.launch = async () => {
   await ensureMongo();
   await (bot as GrammyBot<MyContext>).start();
 };
-
-// stop уже есть у grammy, просто пробрасываем
 
 /* ========= Дефолтный экспорт ========= */
 export default bot;

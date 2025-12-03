@@ -8,6 +8,7 @@ export interface IUser extends Document {
   username?: string;
   firstName?: string;
   lastName?: string;
+  avatarUrl?: string; 
 
   status: UserStatus;
   hasAccess: boolean; // купил доступ к приложению
@@ -45,6 +46,7 @@ const UserSchema = new Schema<IUser>(
     username: String,
     firstName: String,
     lastName: String,
+    avatarUrl: String,
 
     status: {
       type: String,

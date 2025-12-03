@@ -93,14 +93,64 @@ const authMiddleware: RequestHandler = async (req: Request, res: Response, next:
         success: false,
         data: { message: "Bad user data" },
       });
+      
     }
 
     // 4) ищем пользователя в БД
     const user = await User.findOne({ tgId }).exec();
     if (!user) {
+      console.log("authMiddleware: user NOT found in DB tgId =", tgId);
       return res.status(401).json({
         success: false,
         data: { message: "User not found" },
+      });
+    }
+
+    console.log("authMiddleware: found user in DB", {
+      tgId: user.tgId,
+      username: user.username,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      avatarUrl: (user as any).avatarUrl,
+    });
+
+    // 4.1. Подтягиваем актуальные данные из Telegram WebApp
+    let needSave = false;
+
+    if (tgUser.username && tgUser.username !== user.username) {
+      user.username = tgUser.username;
+      needSave = true;
+    }
+
+    if (tgUser.first_name && tgUser.first_name !== user.firstName) {
+      user.firstName = tgUser.first_name;
+      needSave = true;
+    }
+
+    if (tgUser.last_name && tgUser.last_name !== user.lastName) {
+      user.lastName = tgUser.last_name;
+      needSave = true;
+    }
+
+    // --- Аватар ---
+    // Если аватар уже есть в БД, считаем его главным и НЕ трогаем.
+    const hasAvatarInDb =
+      typeof (user as any).avatarUrl === "string" &&
+      (user as any).avatarUrl.trim().length > 0;
+
+    const tgPhotoUrl =
+      typeof tgUser.photo_url === "string" ? tgUser.photo_url.trim() : "";
+
+    // Берём фото из initData ТОЛЬКО если в БД ещё пусто
+    if (!hasAvatarInDb && tgPhotoUrl) {
+      (user as any).avatarUrl = tgPhotoUrl;
+      needSave = true;
+      console.log("authMiddleware: set avatarUrl from initData", tgPhotoUrl);
+    }
+
+    if (needSave) {
+      await user.save().catch((e: any) => {
+        console.error("authMiddleware: failed to save user from tgData", e);
       });
     }
 
@@ -125,11 +175,29 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
     const u = res.locals.user as IUser | undefined;
     if (!u) return fail(res, 401, "user_not_found");
 
+    // 👀 лог — посмотреть, что реально лежит в бд
+    console.log("GET /api/me user.avatarUrl RAW =", (u as any).avatarUrl);
+
+    const fullName =
+      [u.firstName, u.lastName].filter(Boolean).join(" ") ||
+      u.username ||
+      `user${u.tgId}`;
+
+    // аккуратно нормализуем аватар
+    const rawAvatar = (u as any).avatarUrl;
+    const avatarUrl =
+      typeof rawAvatar === "string" && rawAvatar.trim()
+        ? rawAvatar.trim()
+        : null;
+
     const data = {
       tgId: u.tgId,
       username: u.username ?? null,
       firstName: u.firstName ?? null,
       lastName: u.lastName ?? null,
+      fullName,
+      avatarUrl, // ⬅️ сюда кладём нормализованную строку из БД
+
       status: u.status,
       hasAccess: !!u.hasAccess,
       referral: {
@@ -150,6 +218,7 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
     return fail(res, 500, "internal_error");
   }
 });
+
 
 /* =========================================
    POST /api/users/:id — профиль (self или admin)
