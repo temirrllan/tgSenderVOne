@@ -44,7 +44,7 @@ const initialSession = (): MySession => ({});
 /* ========= Helpers ========= */
 const kbMain = (hasAccess: boolean) =>
   new InlineKeyboard()
-    .url("📲 Открыть приложение", MINIAPP_URL)
+    .webApp("📲 Открыть приложение", MINIAPP_URL)
     .row()
     .text("👥 Рефералка", "ref")
     .row()
@@ -357,7 +357,7 @@ bot.callbackQuery("buy_access", async (ctx) => {
     const kb = new InlineKeyboard()
       .text("✅ Я оплатил — проверить", `check_access_${tx.code12}`)
       .row()
-      .url("📲 Открыть приложение", MINIAPP_URL)
+      .webApp("📲 Открыть приложение", MINIAPP_URL)
       .row()
       .text("◀️ Назад", "ref");
 
