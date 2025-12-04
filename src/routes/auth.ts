@@ -3,7 +3,7 @@ import express, { type Request, type Response } from "express";
 import crypto from "crypto";
 import jwt, { type SignOptions, type Secret } from "jsonwebtoken";
 import { Types } from "mongoose";
-import { User, type IUser } from "../common/mongo/Models/User.js";
+import { User, type IUser } from "../models/User.js";
 
 const router = express.Router();
 

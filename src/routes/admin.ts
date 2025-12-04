@@ -1,13 +1,13 @@
 // src/routes/admin.ts
 import express, { type Request, type Response, type Router, type NextFunction } from "express";
 import mongoose, { Types } from "mongoose";
-import authMiddleware from "../middlewares/authMiddleware.js";
+import { authMiddleware } from "../middlewares/auth.middleware.js";
 import { adminOnly } from "../middlewares/adminOnly.middleware.js";
 
-import { User } from "../common/mongo/Models/User.js";
-import { Bot } from "../common/mongo/Models/Bot.js";
-import type { BotStatus } from "../common/mongo/Models/Bot.js";
-import { Group } from "../common/mongo/Models/Group.js";
+import { User } from "../models/User.js";
+import { Bot } from "../models/Bot.js";
+import type { BotStatus } from "../models/Bot.js";
+import { Group } from "../models/Group.js";
 import logAdminAction from "../common/utils/logAdminAction.js";
 
 const router: Router = express.Router();

@@ -1,5 +1,4 @@
-// src/common/mongo/Models/Bot.ts
-import { Schema, model, Types, Document } from "mongoose";
+import { Schema, model, Document, Types } from "mongoose";
 
 export type BotStatus =
   | "awaiting_payment"   // создан, но еще не оплачен

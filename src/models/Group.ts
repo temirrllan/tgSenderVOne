@@ -1,4 +1,4 @@
-import { Schema, model, Types, Document } from "mongoose";
+import { Schema, model, Document, Types } from "mongoose";
 
 export type ChatType = "group" | "supergroup" | "channel";
 

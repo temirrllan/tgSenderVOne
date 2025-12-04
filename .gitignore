@@ -1,7 +1,19 @@
+# backend/.gitignore
 node_modules/
-./node_modules/
-./node_modules/*
 dist/
-dist/*
+*.local
+
+# Environment files
 .env
 .env.local
+.env.production
+.env.development
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db

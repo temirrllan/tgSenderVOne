@@ -1,4 +1,4 @@
-import { Schema, model, Types, Document } from "mongoose";
+import { Schema, model, Document, Types } from "mongoose";
 
 export type TxStatus = "pending" | "confirmed" | "failed" | "expired";
 export type TxType =

@@ -1,5 +1,5 @@
 // src/common/mongo/Models/User.ts
-import { Schema, model, Types, Document } from "mongoose";
+import { Schema, model, Document, Types } from "mongoose";
 
 export type UserStatus = "active" | "blocked" | "pending";
 

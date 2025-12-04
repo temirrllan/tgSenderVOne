@@ -1,0 +1,25 @@
+# backend/render.yaml
+services:
+  - type: web
+    name: sendingbot-backend
+    env: node
+    region: frankfurt  # или oregon/singapore
+    plan: free  # или starter
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false  # задаётся в Dashboard
+      - key: BOT_TOKEN
+        sync: false
+      - key: MAIN_BOT_USERNAME
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true  # автогенерация
+      - key: CRYPTO_WALLET
+        sync: false
+      - key: MINIAPP_URL
+        sync: false
+

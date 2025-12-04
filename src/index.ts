@@ -1,27 +1,22 @@
-// src/index.ts
 import express from "express";
 import cookieParser from "cookie-parser";
-// import cors from "cors"; // не нужен, CORS делаем вручную
 import engine from "ejs-mate";
 import path from "path";
-import mongoose from "mongoose";
-import dotenv from "dotenv";
 import morgan from "morgan";
 import helmet from "helmet";
 
+// ✅ Новые импорты
+import { ENV, isDev } from "./config/env.js";
+import { connectDatabase } from "./config/database.js";
+
 import bot from "./tgBot/bot.js";
 import router from "./routes/router.js";
-import apiRouter from "./routes/api.js"; // API роуты
-
-dotenv.config();
+import apiRouter from "./routes/api.js";
 
 const app = express();
-const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 /**
- * -----------------------------------
- *  🛑 CORS — СТАВИМ ПЕРВЫМ!
- * -----------------------------------
+ * CORS — ставим первым
  */
 app.use((req, res, next) => {
   console.log("CORS middleware:", req.method, req.path);
@@ -43,85 +38,48 @@ app.use((req, res, next) => {
   next();
 });
 
-
 /**
- * -----------------------------------
- *  Общие middleware
- * -----------------------------------
+ * Middleware
  */
 app.use(helmet());
-app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
+app.use(morgan(isDev ? "dev" : "combined"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static("public"));
 
 /**
- * -----------------------------------
- *  View engine (EJS)
- * -----------------------------------
+ * View engine (EJS)
  */
 app.engine("ejs", engine);
 app.set("view engine", "ejs");
 app.set("views", path.resolve("views"));
 
 /**
- * -----------------------------------
- *  MongoDB connection
- * -----------------------------------
+ * MongoDB connection
  */
-const uri = process.env.MONGO_URI || "";
-if (!uri) {
-  console.error("❌ MONGO_URI is not defined in env!");
-  process.exit(1);
-}
-
-async function connectToDatabase() {
-  try {
-    await mongoose.connect(uri, { dbName: "sendingBot" });
-    console.log("✅ Connected to DB");
-  } catch (err) {
-    console.error("❌ DB connection error:", err);
-    throw err;
-  }
-}
-connectToDatabase();
+connectDatabase();
 
 /**
- * -----------------------------------
- *  API РОУТЫ — СТАВИМ ПЕРЕД ОСНОВНЫМИ
- * -----------------------------------
+ * API Routes
  */
-
-// Лог, чтобы убедиться, что API работает
 app.use("/api", (req, _res, next) => {
   console.log("🔥 API HIT:", req.method, req.originalUrl);
   next();
 });
 
-// Подключаем твой API
 app.use("/api", apiRouter);
-
-/**
- * -----------------------------------
- *  Основные роуты сайта / админка
- * -----------------------------------
- */
 app.use("/", router);
 
 /**
- * -----------------------------------
- *  Health-check
- * -----------------------------------
+ * Health check
  */
 app.get("/health", (req, res) => {
   res.status(200).json({ ok: true, uptime: process.uptime() });
 });
 
 /**
- * -----------------------------------
- *  CENTRAL ERROR HANDLER
- * -----------------------------------
+ * Error handler
  */
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error("❌ Unhandled express error:", err);
@@ -133,15 +91,11 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 });
 
 /**
- * -----------------------------------
- *  START SERVER
- * -----------------------------------
+ * Start server
  */
-let serverInstance: any = null;
-
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  serverInstance = app;
+app.listen(ENV.PORT, () => {
+  console.log(`🚀 Server running on port ${ENV.PORT}`);
+  console.log(`📍 Environment: ${ENV.NODE_ENV}`);
 });
 
 // Telegram Bot launcher

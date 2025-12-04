@@ -1,6 +1,6 @@
 // src/middlewares/adminOnly.middleware.ts
 import type { Request, Response, NextFunction } from "express";
-import { User } from "../common/mongo/Models/User.js";
+import { User } from "../models/User.js";
 
 /*
   Проверка прав администратора.

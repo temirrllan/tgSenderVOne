@@ -6,10 +6,10 @@ import mongoose, { Types } from "mongoose";
 import type { InlineKeyboardMarkup } from "grammy/types";
 
 // Модели
-import { User } from "../common/mongo/Models/User.js";
-import { TxHistory } from "../common/mongo/Models/TxHistory.js";
+import { User } from "../models/User.js";
+import { TxHistory } from "../models/TxHistory.js";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { Bot as SenderBotModel } from "../common/mongo/Models/Bot.js";
+import { Bot as SenderBotModel } from "../models/Bot.js";
 
 /* ========= ENV (строго строки) ========= */
 function must(name: string): string {
