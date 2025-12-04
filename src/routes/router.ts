@@ -7,19 +7,26 @@ import api from "./api.js";
 
 const router: Router = express.Router();
 
-/**
- * Итоговые пути:
- * - /api/auth/telegram    (POST)
- * - /api/auth/logout      (POST)
- * - /api/...              (твои пользовательские API)
- * - /api/admin/...        (админка)
- */
+// ✅ Логируем все входящие запросы
+router.use((req, res, next) => {
+  console.log("📍 [ROUTER] Incoming:", {
+    method: req.method,
+    path: req.path,
+    originalUrl: req.originalUrl
+  });
+  next();
+});
+
 router.use("/api/auth", auth);
 router.use("/api/admin", admin);
 router.use("/api", api);
 
 router.get("/", (_req: Request, res: Response) => {
-  res.status(200).json({ status: 200, message: "success sosal", data: { alive: true } });
+  res.status(200).json({ 
+    status: 200, 
+    message: "success", 
+    data: { alive: true } 
+  });
 });
 
 export default router;

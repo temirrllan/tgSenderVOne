@@ -167,10 +167,24 @@ const authMiddleware: RequestHandler = async (req: Request, res: Response, next:
 /* =========================================
    GET /api/me — профиль пользователя (mini-app)
 ========================================= */
+/* =========================================
+   GET /api/me — профиль пользователя (mini-app)
+========================================= */
 router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
   try {
     const u = res.locals.user as IUser | undefined;
-    if (!u) return fail(res, 401, "user_not_found");
+    
+    console.log("📍 GET /api/me - user from locals:", {
+      exists: !!u,
+      tgId: u?.tgId,
+      username: u?.username,
+      hasAccess: u?.hasAccess
+    });
+    
+    if (!u) {
+      console.error("❌ GET /api/me - No user in res.locals!");
+      return fail(res, 401, "user_not_found");
+    }
 
     // 👀 лог — посмотреть, что реально лежит в бд
     console.log("GET /api/me user.avatarUrl RAW =", (u as any).avatarUrl);
@@ -193,7 +207,7 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
       firstName: u.firstName ?? null,
       lastName: u.lastName ?? null,
       fullName,
-      avatarUrl, // ⬅️ сюда кладём нормализованную строку из БД
+      avatarUrl,
 
       status: u.status,
       hasAccess: !!u.hasAccess,
@@ -209,9 +223,11 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
       createdAt: u.createdAt,
     };
 
+    console.log("✅ GET /api/me - sending response:", data);
+
     return success(res, { user: data });
   } catch (err) {
-    console.error("GET /api/me error", err);
+    console.error("❌ GET /api/me error:", err);
     return fail(res, 500, "internal_error");
   }
 });

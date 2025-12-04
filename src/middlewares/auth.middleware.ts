@@ -20,37 +20,50 @@ export async function authMiddleware(
   next: NextFunction
 ) {
   try {
+    console.log("🔐 [AUTH MIDDLEWARE] Start:", {
+      method: req.method,
+      url: req.originalUrl,
+      hasAuthHeader: !!req.headers.authorization,
+      authPreview: req.headers.authorization?.slice(0, 30)
+    });
+
     // 1️⃣ Получаем Authorization header
     const authHeader = req.headers.authorization || "";
     
     if (!authHeader) {
-  return res.status(401).json({
-    success: false,
-    data: { message: "Missing Authorization header" },
-  });
-}
+      console.error("❌ [AUTH] Missing Authorization header");
+      return res.status(401).json({
+        success: false,
+        data: { message: "Missing Authorization header" },
+      });
+    }
     
 let tgId: number;
 let tgUser: any = {};
     
     // 2️⃣ Production: декодируем base64 и проверяем подпись
-    try {
-  // Декодируем base64 -> initData строка
-  const initDataString = Buffer.from(authHeader, "base64").toString("utf-8");
-  
-  console.log("🔍 Auth middleware:", {
-    authHeaderPreview: authHeader.slice(0, 30) + "...",
-    initDataPreview: initDataString.slice(0, 100) + "...",
-  });
-  
-  // Проверяем подпись Telegram
-  const verified = verifyTelegramWebAppData(initDataString);
-  
-  tgId = verified.user.id;
-  tgUser = verified.user;
-  
-  console.log("✅ Auth: Telegram signature verified", { tgId, username: tgUser.username });
-} catch (verifyError) {
+   try {
+      const initDataString = Buffer.from(authHeader, "base64").toString("utf-8");
+      
+      console.log("🔓 [AUTH] Decoded initData:", {
+        length: initDataString.length,
+        preview: initDataString.slice(0, 100)
+      });
+      
+      // Проверяем подпись Telegram
+      const verified = verifyTelegramWebAppData(initDataString);
+      
+      tgId = verified.user.id;
+      tgUser = verified.user;
+      
+      console.log("✅ [AUTH] Telegram signature verified:", { 
+        tgId, 
+        username: tgUser.username,
+        firstName: tgUser.first_name
+      });
+    } catch (verifyError) {
+            console.error("❌ [AUTH] Signature verification failed:", verifyError);
+
       // 3️⃣ Development fallback: разрешаем статичный tgId БЕЗ проверки подписи
       if (isDev) {
         console.warn("⚠️ Dev mode fallback...");
@@ -88,6 +101,8 @@ let tgUser: any = {};
     let user = await User.findOne({ tgId }).exec();
     
     if (!user) {
+            console.log("📝 [AUTH] Creating new user...");
+
       // Автосоздание при первом входе
       user = await User.create({
         tgId,
@@ -96,43 +111,15 @@ let tgUser: any = {};
         lastName: tgUser.last_name || "",
         avatarUrl: tgUser.photo_url || "",
       });
-      console.log("📝 Created new user:", { tgId, username: user.username });
-    } else {
-      // Обновляем актуальные данные из Telegram
-      let needSave = false;
-      
-      if (tgUser.username && tgUser.username !== user.username) {
-        user.username = tgUser.username;
-        needSave = true;
-      }
-      if (tgUser.first_name && tgUser.first_name !== user.firstName) {
-        user.firstName = tgUser.first_name;
-        needSave = true;
-      }
-      if (tgUser.last_name && tgUser.last_name !== user.lastName) {
-        user.lastName = tgUser.last_name;
-        needSave = true;
-      }
-      
-      // Аватар обновляем ТОЛЬКО если в БД пусто
-      const hasAvatarInDb = typeof user.avatarUrl === "string" && user.avatarUrl.trim().length > 0;
-      const tgPhotoUrl = typeof tgUser.photo_url === "string" ? tgUser.photo_url.trim() : "";
-      
-      if (!hasAvatarInDb && tgPhotoUrl) {
-        user.avatarUrl = tgPhotoUrl;
-        needSave = true;
-      }
-      
-      if (needSave) {
-        await user.save();
-      }
-    }
+      console.log("✅ [AUTH] New user created:", { tgId, username: user.username });
+    } 
     
     // 5️⃣ Прикрепляем к req и res.locals
     req.user = user;
     req.tgUser = tgUser;
     res.locals.user = user;
-    
+        console.log("✅ [AUTH] Middleware passed, user attached");
+
     next();
   } catch (error) {
     console.error("❌ Auth middleware error:", error);
