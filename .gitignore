@@ -1,6 +1,7 @@
-# backend/.gitignore
-node_modules/
-dist/
+# frontend/.gitignore
+node_modules
+dist
+dist-ssr
 *.local
 
 # Environment files
@@ -17,3 +18,7 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Editor
+.vscode
+.idea
