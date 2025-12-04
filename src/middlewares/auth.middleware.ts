@@ -24,30 +24,36 @@ export async function authMiddleware(
     const authHeader = req.headers.authorization || "";
     
     if (!authHeader) {
-      return res.status(401).json({
-        success: false,
-        data: { message: "Missing Authorization header" },
-      });
-    }
+  return res.status(401).json({
+    success: false,
+    data: { message: "Missing Authorization header" },
+  });
+}
     
-    let tgId: number;
-    let tgUser: any = {};
+let tgId: number;
+let tgUser: any = {};
     
     // 2️⃣ Production: декодируем base64 и проверяем подпись
     try {
-      // Декодируем base64 -> initData строка
-      const initDataString = Buffer.from(authHeader, "base64").toString("utf-8");
-      
-      // Проверяем подпись Telegram
-      const verified = verifyTelegramWebAppData(initDataString);
-      
-      tgId = verified.user.id;
-      tgUser = verified.user;
-      
-      console.log("✅ Auth: Telegram signature verified", { tgId, username: tgUser.username });
-    } catch (verifyError) {
+  // Декодируем base64 -> initData строка
+  const initDataString = Buffer.from(authHeader, "base64").toString("utf-8");
+  
+  console.log("🔍 Auth middleware:", {
+    authHeaderPreview: authHeader.slice(0, 30) + "...",
+    initDataPreview: initDataString.slice(0, 100) + "...",
+  });
+  
+  // Проверяем подпись Telegram
+  const verified = verifyTelegramWebAppData(initDataString);
+  
+  tgId = verified.user.id;
+  tgUser = verified.user;
+  
+  console.log("✅ Auth: Telegram signature verified", { tgId, username: tgUser.username });
+} catch (verifyError) {
       // 3️⃣ Development fallback: разрешаем статичный tgId БЕЗ проверки подписи
       if (isDev) {
+        console.warn("⚠️ Dev mode fallback...");
         console.warn("⚠️ Auth: Signature verification failed, using dev fallback");
         
         try {
