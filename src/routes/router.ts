@@ -3,7 +3,7 @@ import type { Request, Response, Router } from "express";
 import express from "express";
 import admin from "./admin.js";
 import auth from "./auth.js";
-import api from "./api.js";
+import api from "./api.js";  // ← этот роут содержит GET /me
 
 const router: Router = express.Router();
 
@@ -19,7 +19,7 @@ router.use((req, res, next) => {
 
 router.use("/api/auth", auth);
 router.use("/api/admin", admin);
-router.use("/api", api);
+router.use("/api", api);  // ← GET /me находится здесь
 
 router.get("/", (_req: Request, res: Response) => {
   res.status(200).json({ 
