@@ -19,9 +19,18 @@ const app = express();
  * CORS — ставим первым
  */
 app.use((req, res, next) => {
-  console.log("CORS middleware:", req.method, req.path);
-
-  res.header("Access-Control-Allow-Origin", "*");
+  // ✅ Разрешаем Telegram домены
+  const allowedOrigins = [
+    "https://web.telegram.org",
+    "https://telegram.org", 
+    "https://sendler-bot-front.vercel.app", // ваш фронт
+  ];
+  
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+  }
+  
   res.header(
     "Access-Control-Allow-Methods",
     "GET,POST,PUT,PATCH,DELETE,OPTIONS"
