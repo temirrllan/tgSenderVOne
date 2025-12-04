@@ -431,8 +431,24 @@ bot.on("message", async (ctx) => {
 });
 
 /* ========= Добавляем совместимость с index.ts (launch/stop) ========= */
+// После строки bot.launch = async () => {
 bot.launch = async () => {
   await ensureMongo();
+  
+  // ✅ Настраиваем Menu Button для WebApp
+  try {
+    await (bot as GrammyBot<MyContext>).api.setChatMenuButton({
+      menu_button: {
+        type: "web_app",
+        text: "Открыть приложение",
+        web_app: { url: MINIAPP_URL }
+      }
+    });
+    console.log("✅ Menu button configured");
+  } catch (err) {
+    console.error("Failed to set menu button:", err);
+  }
+  
   await (bot as GrammyBot<MyContext>).start();
 };
 
