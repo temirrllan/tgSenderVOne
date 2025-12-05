@@ -148,24 +148,24 @@ router.get(
     const search = String(req.query.search ?? "").trim();
     const ownerId = String(req.query.ownerId ?? "").trim();
 
-    const q: Record<string, any> = {};
-    if (ownerId && mongoose.isValidObjectId(ownerId)) q.owner = ownerId;
+    const query: Record<string, any> = {};
+    if (ownerId && mongoose.isValidObjectId(ownerId)) query.owner = ownerId;
     if (search) {
-      q.$or = [
+      query.$or = [
         { username: new RegExp(search, "i") },
         { messageText: new RegExp(search, "i") },
       ];
     }
 
     const [items, total] = await Promise.all([
-      Bot.find(q)
+      Bot.find(query)
         .select("owner username photoUrl messageText interval status groups createdAt")
         .sort({ createdAt: -1 })
         .skip(offset)
         .limit(limit)
         .lean()
         .exec(),
-      Bot.countDocuments(q).exec(),
+      Bot.countDocuments(query).exec(),
     ]);
 
     return success(res, { items, total, limit, offset });
@@ -466,13 +466,13 @@ router.post(
     if (!cleanUsername) return fail(res, 400, "bad_username");
 
     const allowedIntervals = [3600, 7200, 10800, 14400, 18000, 21600, 43200, 86400]; // сек
-    const iv = Number(interval);
-    if (!allowedIntervals.includes(iv)) return fail(res, 400, "bad_interval");
+    const intervalValue  = Number(interval);
+    if (!allowedIntervals.includes(intervalValue )) return fail(res, 400, "bad_interval");
 
     // статус опционально
-    const s = status ? String(status) : "active";
+    const statusValue = status ? String(status) : "active";
     const allowedStatuses = ["active", "blocked", "deleted"];
-    if (!allowedStatuses.includes(s)) return fail(res, 400, "bad_status");
+    if (!allowedStatuses.includes(statusValue)) return fail(res, 400, "bad_status");
 
     // создаём
     const bot = new Bot({
@@ -480,8 +480,8 @@ router.post(
       username: cleanUsername,
       photoUrl: photoUrl === null ? "" : (photoUrl ? String(photoUrl).trim() : ""),
       messageText: String(messageText).trim(),
-      interval: iv as any,            // прошёл валидацию
-      status: s as any,               // прошёл валидацию
+      interval: intervalValue as any,            // прошёл валидацию
+      status: statusValue as any,               // прошёл валидацию
       groups: [],
       chats: [],
     });

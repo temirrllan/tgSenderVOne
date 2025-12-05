@@ -44,8 +44,8 @@ export async function authMiddleware(
       });
     }
     
-    let tgId: number;
-    let tgUser: any = {};
+    let telegramUserId: number;
+    let telegramUse: any = {};
     
     // 2️⃣ Декодируем base64 → initData string
     let initDataString: string;
@@ -69,13 +69,13 @@ export async function authMiddleware(
     try {
       const verified = verifyTelegramWebAppData(initDataString);
       
-      tgId = verified.user.id;
-      tgUser = verified.user;
+      telegramUserId = verified.user.id;
+      telegramUse = verified.user;
       
       console.log("✅ [AUTH] Telegram signature verified:", { 
-        tgId, 
-        username: tgUser.username,
-        firstName: tgUser.first_name,
+        telegramUserId, 
+        username: telegramUse.username,
+        firstName: telegramUse.first_name,
       });
     } catch (verifyError) {
       console.error("❌ [AUTH] Signature verification failed:", verifyError);
@@ -90,9 +90,9 @@ export async function authMiddleware(
           
           if (userStr) {
             const parsed = JSON.parse(userStr);
-            tgId = parsed.id;
-            tgUser = parsed;
-            console.log("🛠️ [DEV] Using tgId without signature:", { tgId });
+            telegramUserId = parsed.id;
+            telegramUse = parsed;
+            console.log("🛠️ [DEV] Using tgId without signature:", { telegramUserId });
           } else {
             throw new Error("No user in initData");
           }
@@ -114,48 +114,48 @@ export async function authMiddleware(
     }
     
     // 4️⃣ Ищем пользователя в БД
-    let user = await User.findOne({ tgId }).exec();
+    let user = await User.findOne({ telegramUserId }).exec();
     
     if (!user) {
       console.log("📝 [AUTH] User not found, creating new user...");
 
       // Автосоздание при первом входе
       user = await User.create({
-        tgId,
-        username: tgUser.username || "",
-        firstName: tgUser.first_name || "",
-        lastName: tgUser.last_name || "",
-        avatarUrl: tgUser.photo_url || "",
+        telegramUserId,
+        username: telegramUse.username || "",
+        firstName: telegramUse.first_name || "",
+        lastName: telegramUse.last_name || "",
+        avatarUrl: telegramUse.photo_url || "",
       });
       
       console.log("✅ [AUTH] New user created:", { 
-        tgId, 
+        telegramUserId, 
         username: user.username,
       });
     } else {
       // Обновляем данные пользователя из Telegram
       let needSave = false;
 
-      if (tgUser.username && tgUser.username !== user.username) {
-        user.username = tgUser.username;
+      if (telegramUse.username && telegramUse.username !== user.username) {
+        user.username = telegramUse.username;
         needSave = true;
       }
 
-      if (tgUser.first_name && tgUser.first_name !== user.firstName) {
-        user.firstName = tgUser.first_name;
+      if (telegramUse.first_name && telegramUse.first_name !== user.firstName) {
+        user.firstName = telegramUse.first_name;
         needSave = true;
       }
 
-      if (tgUser.last_name && tgUser.last_name !== user.lastName) {
-        user.lastName = tgUser.last_name;
+      if (telegramUse.last_name && telegramUse.last_name !== user.lastName) {
+        user.lastName = telegramUse.last_name;
         needSave = true;
       }
 
       // Аватар: обновляем только если в БД пусто
       const hasAvatarInDb = typeof (user as any).avatarUrl === "string" 
         && (user as any).avatarUrl.trim().length > 0;
-      const tgPhotoUrl = typeof tgUser.photo_url === "string" 
-        ? tgUser.photo_url.trim() 
+      const tgPhotoUrl = typeof telegramUse.photo_url === "string" 
+        ? telegramUse.photo_url.trim() 
         : "";
 
       if (!hasAvatarInDb && tgPhotoUrl) {
@@ -171,7 +171,7 @@ export async function authMiddleware(
     
     // 5️⃣ Прикрепляем к req и res.locals
     req.user = user;
-    req.tgUser = tgUser;
+    req.tgUser = telegramUse;
     res.locals.user = user;
     
     console.log("✅ [AUTH] Middleware passed, user attached:", {

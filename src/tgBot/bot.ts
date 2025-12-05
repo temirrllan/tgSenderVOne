@@ -80,10 +80,10 @@ async function ensureUserAvatar(user: any, ctx: MyContext) {
   try {
     if (user.avatarUrl && typeof user.avatarUrl === "string") return;
 
-    const tg = ctx.from;
-    if (!tg) return;
+    const telegramUser  = ctx.from;
+    if (!telegramUser ) return;
 
-    const photos = await ctx.api.getUserProfilePhotos(tg.id, { limit: 1 });
+    const photos = await ctx.api.getUserProfilePhotos(telegramUser.id, { limit: 1 });
 
     // безопасные проверки
     if (
@@ -339,7 +339,7 @@ bot.callbackQuery("buy_access", async (ctx) => {
     const user = await User.findOne({ tgId: ctx.from!.id });
     if (!user) return ctx.answerCallbackQuery({ text: "Сначала /start" });
 
-    const tx = await createOrReusePendingAccess(
+    const transaction = await createOrReusePendingAccess(
       user._id as Types.ObjectId,
       Number(ACCESS_PRICE),
       ACCESS_CURRENCY,
@@ -350,12 +350,12 @@ bot.callbackQuery("buy_access", async (ctx) => {
       `<b>Оплата доступа</b>\n\n` +
       `Сумма: <b>${ACCESS_PRICE} ${ACCESS_CURRENCY}</b>\n` +
       `Кошелёк: <code>${CRYPTO_WALLET}</code>\n` +
-      `Ваш 12-значный код: <code>${tx.code12}</code>\n\n` +
+      `Ваш 12-значный код: <code>${transaction.code12}</code>\n\n` +
       `⚠️ Обязательно укажите код в комментарии/мемо перевода.\n` +
       `После отправки нажмите «Проверить оплату» — проверка занимает до 10 минут.`;
 
     const kb = new InlineKeyboard()
-      .text("✅ Я оплатил — проверить", `check_access_${tx.code12}`)
+      .text("✅ Я оплатил — проверить", `check_access_${transaction.code12}`)
       .row()
       .webApp("📲 Открыть приложение", MINIAPP_URL)
       .row()

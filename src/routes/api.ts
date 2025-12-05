@@ -172,55 +172,55 @@ const authMiddleware: RequestHandler = async (req: Request, res: Response, next:
 ========================================= */
 router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
   try {
-    const u = res.locals.user as IUser | undefined;
+    const user = res.locals.user as IUser | undefined;
     
     console.log("📍 GET /api/me - user from locals:", {
-      exists: !!u,
-      tgId: u?.tgId,
-      username: u?.username,
-      hasAccess: u?.hasAccess
+      exists: !!user,
+      tgId: user?.tgId,
+      username: user?.username,
+      hasAccess: user?.hasAccess
     });
     
-    if (!u) {
+    if (!user) {
       console.error("❌ GET /api/me - No user in res.locals!");
       return fail(res, 401, "user_not_found");
     }
 
     // 👀 лог — посмотреть, что реально лежит в бд
-    console.log("GET /api/me user.avatarUrl RAW =", (u as any).avatarUrl);
+    console.log("GET /api/me user.avatarUrl RAW =", (user as any).avatarUrl);
 
     const fullName =
-      [u.firstName, u.lastName].filter(Boolean).join(" ") ||
-      u.username ||
-      `user${u.tgId}`;
+      [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+      user.username ||
+      `user${user.tgId}`;
 
     // аккуратно нормализуем аватар
-    const rawAvatar = (u as any).avatarUrl;
+    const rawAvatar = (user as any).avatarUrl;
     const avatarUrl =
       typeof rawAvatar === "string" && rawAvatar.trim()
         ? rawAvatar.trim()
         : null;
 
     const data = {
-      tgId: u.tgId,
-      username: u.username ?? null,
-      firstName: u.firstName ?? null,
-      lastName: u.lastName ?? null,
+      tgId: user.tgId,
+      username: user.username ?? null,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
       fullName,
       avatarUrl,
 
-      status: u.status,
-      hasAccess: !!u.hasAccess,
+      status: user.status,
+      hasAccess: !!user.hasAccess,
       referral: {
-        code: u.refCode,
-        directCount: Array.isArray(u.referrals) ? u.referrals.length : 0,
-        levels: u.referralLevels,
-        balance: u.referralBalance,
-        earnedTotal: u.referralEarnedTotal,
+        code: user.refCode,
+        directCount: Array.isArray(user.referrals) ? user.referrals.length : 0,
+        levels: user.referralLevels,
+        balance: user.referralBalance,
+        earnedTotal: user.referralEarnedTotal,
       },
-      botsCount: Array.isArray(u.bots) ? u.bots.length : 0,
-      accessGrantedAt: u.accessGrantedAt ?? null,
-      createdAt: u.createdAt,
+      botsCount: Array.isArray(user.bots) ? user.bots.length : 0,
+      accessGrantedAt: user.accessGrantedAt ?? null,
+      createdAt: user.createdAt,
     };
 
     console.log("✅ GET /api/me - sending response:", data);
@@ -519,19 +519,19 @@ router.get("/users/:id/bots", authMiddleware, async (req: Request, res: Response
     const search = String(req.query.search ?? "").trim();
     const status = String(req.query.status ?? "").trim();
 
-    const q: Record<string, any> = { owner: id };
-    if (search) q.$or = [{ username: new RegExp(search, "i") }, { messageText: new RegExp(search, "i") }];
-    if (status && ["active", "blocked", "deleted"].includes(status)) q.status = status;
+    const query: Record<string, any> = { owner: id };
+    if (search) query.$or = [{ username: new RegExp(search, "i") }, { messageText: new RegExp(search, "i") }];
+    if (status && ["active", "blocked", "deleted"].includes(status)) query.status = status;
 
     const [items, total] = await Promise.all([
-      Bot.find(q)
+      Bot.find(query)
         .select("owner username photoUrl messageText interval status groups createdAt")
         .sort({ createdAt: -1 })
         .skip(offset)
         .limit(limit)
         .lean()
         .exec(),
-      Bot.countDocuments(q).exec(),
+      Bot.countDocuments(query).exec(),
     ]);
 
     return success(res, {
@@ -540,7 +540,7 @@ router.get("/users/:id/bots", authMiddleware, async (req: Request, res: Response
       limit,
       offset,
       userId: id,
-      filters: { search: search || undefined, status: q.status || undefined },
+      filters: { search: search || undefined, status: query.status || undefined },
     });
   } catch (err) {
     console.error("GET /api/users/:id/bots error", err);
@@ -554,8 +554,8 @@ router.get("/users/:id/bots", authMiddleware, async (req: Request, res: Response
 ========================================= */
 router.post("/bots/:id/groups/add", authMiddleware, express.json(), async (req, res) => {
   try {
-    const me = res.locals.user as IUser | undefined;
-    if (!me) return fail(res, 401, "no_auth");
+    const currentUser = res.locals.user as IUser | undefined;
+    if (!currentUser) return fail(res, 401, "no_auth");
 
     const botId = req.params.id as string;
     if (!mongoose.Types.ObjectId.isValid(botId)) return fail(res, 400, "invalid_id");
@@ -566,8 +566,8 @@ router.post("/bots/:id/groups/add", authMiddleware, express.json(), async (req, 
     const bot = await Bot.findById(botId).exec();
     if (!bot) return fail(res, 404, "bot_not_found");
 
-    const isAdmin = (me as any)?.isAdmin === true;
-    if (!isAdmin && String(bot.owner) !== String(me._id)) return fail(res, 403, "forbidden");
+    const isAdmin = (currentUser as any)?.isAdmin === true;
+    if (!isAdmin && String(bot.owner) !== String(currentUser._id)) return fail(res, 403, "forbidden");
 
     const group = await Group.findOneAndUpdate(
       { chatId: String(chatId) },
@@ -597,8 +597,8 @@ router.post("/bots/:id/groups/add", authMiddleware, express.json(), async (req, 
 ========================================= */
 router.post("/bots/:id/groups/delete", authMiddleware, express.json(), async (req, res) => {
   try {
-    const me = res.locals.user as IUser | undefined;
-    if (!me) return fail(res, 401, "no_auth");
+    const currentUser = res.locals.user as IUser | undefined;
+    if (!currentUser) return fail(res, 401, "no_auth");
 
     const botId = req.params.id as string;
     if (!mongoose.Types.ObjectId.isValid(botId)) return fail(res, 400, "invalid_id");
@@ -609,8 +609,8 @@ router.post("/bots/:id/groups/delete", authMiddleware, express.json(), async (re
     const bot = await Bot.findById(botId).exec();
     if (!bot) return fail(res, 404, "bot_not_found");
 
-    const isAdmin = (me as any)?.isAdmin === true;
-    if (!isAdmin && String(bot.owner) !== String(me._id)) return fail(res, 403, "forbidden");
+    const isAdmin = (currentUser as any)?.isAdmin === true;
+    if (!isAdmin && String(bot.owner) !== String(currentUser._id)) return fail(res, 403, "forbidden");
 
     const group = await Group.findOne({ chatId: String(chatId) }).lean();
     if (!group) return fail(res, 404, "group_not_found");
@@ -635,8 +635,8 @@ router.post("/bots/:id/groups/delete", authMiddleware, express.json(), async (re
 ========================================= */
 router.post("/bots/create-payment", authMiddleware, express.json(), async (req, res) => {
   try {
-    const me = res.locals.user as IUser | undefined;
-    if (!me) return fail(res, 401, "no_auth");
+    const currentUser = res.locals.user as IUser | undefined;
+    if (!currentUser) return fail(res, 401, "no_auth");
 
     const { username, messageText, interval, photoUrl } = req.body as Partial<{
       username: string;
@@ -653,8 +653,8 @@ router.post("/bots/create-payment", authMiddleware, express.json(), async (req, 
     if (!cleanUsername) return fail(res, 400, "bad_username");
 
     const allowedIntervals = [3600, 7200, 10800, 14400, 18000, 21600, 43200, 86400];
-    const iv = Number(interval);
-    if (!allowedIntervals.includes(iv)) return fail(res, 400, "bad_interval");
+    const intervalValue = Number(interval);
+    if (!allowedIntervals.includes(intervalValue)) return fail(res, 400, "bad_interval");
 
     const BOT_PRICE = Number(process.env.BOT_PRICE ?? 10);
     const BOT_CURRENCY = process.env.BOT_CURRENCY ?? "USDT";
@@ -662,8 +662,8 @@ router.post("/bots/create-payment", authMiddleware, express.json(), async (req, 
     if (!CRYPTO_WALLET) return fail(res, 500, "wallet_not_configured");
 
     const code12 = generate12DigitCode();
-    const tx = await TxHistory.create({
-      user: me._id as unknown as Types.ObjectId,
+    const transaction = await TxHistory.create({
+      user: currentUser._id as unknown as Types.ObjectId,
       type: "BOT_PURCHASE",
       status: "pending",
       amount: BOT_PRICE,
@@ -674,7 +674,7 @@ router.post("/bots/create-payment", authMiddleware, express.json(), async (req, 
         request: {
           username: cleanUsername,
           messageText: String(messageText).trim(),
-          interval: iv,
+          interval: intervalValue,
           photoUrl: photoUrl === null ? "" : (photoUrl ? String(photoUrl).trim() : ""),
         },
       },
@@ -683,7 +683,7 @@ router.post("/bots/create-payment", authMiddleware, express.json(), async (req, 
     return success(
       res,
       {
-        txId: tx._id,
+        txId: transaction._id,
         wallet: CRYPTO_WALLET,
         code12,
         amount: BOT_PRICE,
@@ -706,45 +706,45 @@ router.post("/bots/create-payment", authMiddleware, express.json(), async (req, 
 ========================================= */
 router.post("/bots/create-from-tx/:txId", authMiddleware, async (req: Request, res: Response) => {
   try {
-    const me = res.locals.user as IUser | undefined;
-    if (!me) return fail(res, 401, "no_auth");
+    const currentUser = res.locals.user as IUser | undefined;
+    if (!currentUser) return fail(res, 401, "no_auth");
 
     const txId = String(req.params.txId ?? "");
     if (!mongoose.isValidObjectId(txId)) return fail(res, 400, "invalid_tx_id");
 
-    const tx = await TxHistory.findById(txId).exec();
-    if (!tx) return fail(res, 404, "tx_not_found");
+    const transaction = await TxHistory.findById(txId).exec();
+    if (!transaction) return fail(res, 404, "tx_not_found");
 
     // транзакция должна принадлежать текущему пользователю
-    if (String(tx.user) !== String(me._id)) {
+    if (String(transaction.user) !== String(currentUser._id)) {
       return fail(res, 403, "forbidden");
     }
 
     // только покупки бота
-    if (tx.type !== "BOT_PURCHASE") {
+    if (transaction.type !== "BOT_PURCHASE") {
       return fail(res, 400, "wrong_tx_type");
     }
 
     // если уже привязан бот — просто отдаём его
-    if (tx.bot) {
-      const existingBot = await Bot.findById(tx.bot)
+    if (transaction.bot) {
+      const existingBot = await Bot.findById(transaction.bot)
         .select("owner username photoUrl messageText interval status groups createdAt")
         .lean()
         .exec();
-      return success(res, { bot: existingBot, txId: tx._id, reused: true });
+      return success(res, { bot: existingBot, txId: transaction._id, reused: true });
     }
 
     // DEV-ЛОГИКА:
     // пока нет реальной проверки блокчейна — если pending, считаем что оплата прошла
-    if (tx.status === "pending") {
-      await tx.markConfirmed(); // метод из модели TxHistory
+    if (transaction.status === "pending") {
+      await transaction.markConfirmed(); // метод из модели TxHistory
     }
 
-    if (tx.status !== "confirmed") {
+    if (transaction.status !== "confirmed") {
       return fail(res, 400, "tx_not_confirmed");
     }
 
-    const metaReq = (tx.meta?.request ?? {}) as any;
+    const metaReq = (transaction.meta?.request ?? {}) as any;
     const cleanUsername = String(metaReq.username || "").replace(/^@/, "").trim();
     const messageText = String(metaReq.messageText || "").trim();
     const interval = Number(metaReq.interval || 0);
@@ -763,7 +763,7 @@ router.post("/bots/create-from-tx/:txId", authMiddleware, async (req: Request, r
 
     // создаём бота
     const bot = await Bot.create({
-      owner: me._id as any,
+      owner: currentUser._id as any,
       username: cleanUsername,
       photoUrl,
       messageText,
@@ -776,7 +776,7 @@ router.post("/bots/create-from-tx/:txId", authMiddleware, async (req: Request, r
     });
 
     // привяжем бота к пользователю
-    const freshUser = await User.findById(me._id).exec();
+    const freshUser = await User.findById(currentUser._id).exec();
     if (freshUser) {
       freshUser.bots = Array.isArray(freshUser.bots) ? freshUser.bots : [];
       if (!freshUser.bots.some((bId) => String(bId) === String(bot._id))) {
@@ -786,15 +786,15 @@ router.post("/bots/create-from-tx/:txId", authMiddleware, async (req: Request, r
     }
 
     // привяжем бота к транзакции
-    tx.bot = bot._id as any;
-    await tx.save();
+    transaction.bot = bot._id as any;
+    await transaction.save();
 
     const dto = await Bot.findById(bot._id)
       .select("owner username photoUrl messageText interval status groups createdAt")
       .lean()
       .exec();
 
-    return success(res, { bot: dto, txId: tx._id }, 201);
+    return success(res, { bot: dto, txId: transaction._id }, 201);
   } catch (err) {
     console.error("POST /api/bots/create-from-tx/:txId error", err);
     return fail(res, 500, "internal_error");
@@ -807,8 +807,8 @@ router.post("/bots/create-from-tx/:txId", authMiddleware, async (req: Request, r
 ========================================= */
 router.post("/bots/:id/block", authMiddleware, async (req, res) => {
   try {
-    const me = res.locals.user as IUser | undefined;
-    if (!me) return fail(res, 401, "no_auth");
+    const currentUser = res.locals.user as IUser | undefined;
+    if (!currentUser) return fail(res, 401, "no_auth");
 
     const id = String(req.params.id ?? "");
     if (!mongoose.isValidObjectId(id)) return fail(res, 400, "invalid_id");
@@ -816,8 +816,8 @@ router.post("/bots/:id/block", authMiddleware, async (req, res) => {
     const bot = await Bot.findById(id).exec();
     if (!bot) return fail(res, 404, "bot_not_found");
 
-    const isAdmin = (me as any)?.isAdmin === true;
-    if (!isAdmin && String(bot.owner) !== String(me._id)) return fail(res, 403, "forbidden");
+    const isAdmin = (currentUser as any)?.isAdmin === true;
+    if (!isAdmin && String(bot.owner) !== String(currentUser._id)) return fail(res, 403, "forbidden");
 
     (bot as any).status = "blocked";
     await bot.save();
@@ -832,8 +832,8 @@ router.post("/bots/:id/block", authMiddleware, async (req, res) => {
 // 12) POST /api/bots/:id/unblock — разблокировать бота (владелец/админ)
 router.post("/bots/:id/unblock", authMiddleware, async (req, res) => {
   try {
-    const me = res.locals.user as IUser | undefined;
-    if (!me) return fail(res, 401, "no_auth");
+    const currentUser = res.locals.user as IUser | undefined;
+    if (!currentUser) return fail(res, 401, "no_auth");
 
     // ✅ жёстко нормализуем id в строку и используем mongoose.isValidObjectId
     const id = String(req.params.id ?? "");
@@ -842,8 +842,8 @@ router.post("/bots/:id/unblock", authMiddleware, async (req, res) => {
     const bot = await Bot.findById(id).exec();
     if (!bot) return fail(res, 404, "bot_not_found");
 
-    const isAdmin = (me as any)?.isAdmin === true;
-    if (!isAdmin && String(bot.owner) !== String(me._id)) {
+    const isAdmin = (currentUser as any)?.isAdmin === true;
+    if (!isAdmin && String(bot.owner) !== String(currentUser._id)) {
       return fail(res, 403, "forbidden");
     }
 
@@ -886,8 +886,8 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
     if (!cleanUsername) return fail(res, 400, "bad_username");
 
     const allowed = [3600, 7200, 10800, 14400, 18000, 21600, 43200, 86400]; // сек: 1ч..24ч
-    const iv = Number(interval);
-    if (!allowed.includes(iv)) return fail(res, 400, "bad_interval");
+    const intervalValue = Number(interval);
+    if (!allowed.includes(intervalValue)) return fail(res, 400, "bad_interval");
 
     // создаём
     const bot = new Bot({
@@ -895,7 +895,7 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
       username: cleanUsername,
       photoUrl: photoUrl === null ? "" : (photoUrl ? String(photoUrl).trim() : ""),
       messageText: String(messageText).trim(),
-      interval: iv as any,
+      interval: intervalValue as any,
       status: "active",
       groups: [],
       chats: [],
@@ -931,8 +931,8 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
 ========================================= */
 router.post("/bots/:id/delete", authMiddleware, async (req, res) => {
   try {
-    const me = res.locals.user as IUser | undefined;
-    if (!me) return fail(res, 401, "no_auth");
+    const currentUser = res.locals.user as IUser | undefined;
+    if (!currentUser) return fail(res, 401, "no_auth");
 
     const id = String(req.params.id ?? "");
   if (!mongoose.isValidObjectId(id)) return fail(res, 400, "invalid_id");
@@ -940,8 +940,8 @@ router.post("/bots/:id/delete", authMiddleware, async (req, res) => {
     const bot = await Bot.findById(id).exec();
     if (!bot) return fail(res, 404, "bot_not_found");
 
-    const isAdmin = (me as any)?.isAdmin === true;
-    if (!isAdmin && String(bot.owner) !== String(me._id)) return fail(res, 403, "forbidden");
+    const isAdmin = (currentUser as any)?.isAdmin === true;
+    if (!isAdmin && String(bot.owner) !== String(currentUser._id)) return fail(res, 403, "forbidden");
 
     // soft-delete
     (bot as any).status = "deleted";
