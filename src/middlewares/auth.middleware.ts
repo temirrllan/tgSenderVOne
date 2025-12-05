@@ -11,7 +11,13 @@ export interface AuthRequest extends Request {
 
 /**
  * Middleware авторизации через Telegram WebApp initData
- * Production: проверяет подпись Telegram
+ * 
+ * Проверяет:
+ * 1. Наличие Authorization header
+ * 2. Валидность подписи Telegram (production)
+ * 3. Существование пользователя в БД
+ * 
+ * Production: строгая проверка подписи
  * Development: fallback на статичный tgId для тестов
  */
 export async function authMiddleware(
@@ -20,37 +26,47 @@ export async function authMiddleware(
   next: NextFunction
 ) {
   try {
-    console.log("🔐 [AUTH MIDDLEWARE] Start:", {
+    console.log("🔐 [AUTH] Start:", {
       method: req.method,
       url: req.originalUrl,
-      hasAuthHeader: !!req.headers.authorization,
-      authPreview: req.headers.authorization?.slice(0, 30)
+      hasAuth: !!req.headers.authorization,
     });
 
-    // 1️⃣ Получаем Authorization header
+    // 1️⃣ Проверяем наличие Authorization header
     const authHeader = req.headers.authorization || "";
     
     if (!authHeader) {
       console.error("❌ [AUTH] Missing Authorization header");
       return res.status(401).json({
         success: false,
-        data: { message: "Missing Authorization header" },
+        error: "unauthorized",
+        message: "Missing Authorization header",
       });
     }
     
-let tgId: number;
-let tgUser: any = {};
+    let tgId: number;
+    let tgUser: any = {};
     
-    // 2️⃣ Production: декодируем base64 и проверяем подпись
-   try {
-      const initDataString = Buffer.from(authHeader, "base64").toString("utf-8");
+    // 2️⃣ Декодируем base64 → initData string
+    let initDataString: string;
+    try {
+      initDataString = Buffer.from(authHeader, "base64").toString("utf-8");
       
       console.log("🔓 [AUTH] Decoded initData:", {
         length: initDataString.length,
-        preview: initDataString.slice(0, 100)
+        preview: initDataString.slice(0, 100),
       });
-      
-      // Проверяем подпись Telegram
+    } catch (decodeError) {
+      console.error("❌ [AUTH] Failed to decode base64:", decodeError);
+      return res.status(401).json({
+        success: false,
+        error: "invalid_auth_format",
+        message: "Invalid Authorization format",
+      });
+    }
+    
+    // 3️⃣ Production: проверяем подпись Telegram
+    try {
       const verified = verifyTelegramWebAppData(initDataString);
       
       tgId = verified.user.id;
@@ -59,18 +75,16 @@ let tgUser: any = {};
       console.log("✅ [AUTH] Telegram signature verified:", { 
         tgId, 
         username: tgUser.username,
-        firstName: tgUser.first_name
+        firstName: tgUser.first_name,
       });
     } catch (verifyError) {
-            console.error("❌ [AUTH] Signature verification failed:", verifyError);
+      console.error("❌ [AUTH] Signature verification failed:", verifyError);
 
-      // 3️⃣ Development fallback: разрешаем статичный tgId БЕЗ проверки подписи
+      // Development fallback: разрешаем без проверки подписи
       if (isDev) {
-        console.warn("⚠️ Dev mode fallback...");
-        console.warn("⚠️ Auth: Signature verification failed, using dev fallback");
+        console.warn("⚠️ [DEV MODE] Using fallback without signature check");
         
         try {
-          const initDataString = Buffer.from(authHeader, "base64").toString("utf-8");
           const params = new URLSearchParams(initDataString);
           const userStr = params.get("user");
           
@@ -78,30 +92,32 @@ let tgUser: any = {};
             const parsed = JSON.parse(userStr);
             tgId = parsed.id;
             tgUser = parsed;
-            console.log("🛠️ Dev mode: using tgId without signature check", { tgId });
+            console.log("🛠️ [DEV] Using tgId without signature:", { tgId });
           } else {
             throw new Error("No user in initData");
           }
-        } catch {
+        } catch (parseError) {
           return res.status(401).json({
             success: false,
-            data: { message: "Invalid initData format" },
+            error: "invalid_init_data",
+            message: "Invalid initData format",
           });
         }
       } else {
         // Production: отклоняем невалидные данные
         return res.status(401).json({
           success: false,
-          data: { message: "Invalid Telegram signature" },
+          error: "invalid_signature",
+          message: "Invalid Telegram signature",
         });
       }
     }
     
-    // 4️⃣ Ищем/создаём пользователя в БД
+    // 4️⃣ Ищем пользователя в БД
     let user = await User.findOne({ tgId }).exec();
     
     if (!user) {
-            console.log("📝 [AUTH] Creating new user...");
+      console.log("📝 [AUTH] User not found, creating new user...");
 
       // Автосоздание при первом входе
       user = await User.create({
@@ -111,21 +127,66 @@ let tgUser: any = {};
         lastName: tgUser.last_name || "",
         avatarUrl: tgUser.photo_url || "",
       });
-      console.log("✅ [AUTH] New user created:", { tgId, username: user.username });
-    } 
+      
+      console.log("✅ [AUTH] New user created:", { 
+        tgId, 
+        username: user.username,
+      });
+    } else {
+      // Обновляем данные пользователя из Telegram
+      let needSave = false;
+
+      if (tgUser.username && tgUser.username !== user.username) {
+        user.username = tgUser.username;
+        needSave = true;
+      }
+
+      if (tgUser.first_name && tgUser.first_name !== user.firstName) {
+        user.firstName = tgUser.first_name;
+        needSave = true;
+      }
+
+      if (tgUser.last_name && tgUser.last_name !== user.lastName) {
+        user.lastName = tgUser.last_name;
+        needSave = true;
+      }
+
+      // Аватар: обновляем только если в БД пусто
+      const hasAvatarInDb = typeof (user as any).avatarUrl === "string" 
+        && (user as any).avatarUrl.trim().length > 0;
+      const tgPhotoUrl = typeof tgUser.photo_url === "string" 
+        ? tgUser.photo_url.trim() 
+        : "";
+
+      if (!hasAvatarInDb && tgPhotoUrl) {
+        (user as any).avatarUrl = tgPhotoUrl;
+        needSave = true;
+      }
+
+      if (needSave) {
+        await user.save();
+        console.log("✅ [AUTH] User data updated from Telegram");
+      }
+    }
     
     // 5️⃣ Прикрепляем к req и res.locals
     req.user = user;
     req.tgUser = tgUser;
     res.locals.user = user;
-        console.log("✅ [AUTH] Middleware passed, user attached");
+    
+    console.log("✅ [AUTH] Middleware passed, user attached:", {
+      userId: user._id,
+      tgId: user.tgId,
+      hasAccess: user.hasAccess,
+    });
 
     next();
   } catch (error) {
-    console.error("❌ Auth middleware error:", error);
+    console.error("❌ [AUTH] Unhandled error:", error);
     return res.status(500).json({
       success: false,
-      data: { message: "Internal server error" },
+      error: "internal_error",
+      message: "Internal server error",
     });
   }
 }
