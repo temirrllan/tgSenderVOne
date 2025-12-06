@@ -420,8 +420,9 @@ router.get("/referral", authMiddleware, async (_req: Request, res: Response) => 
 ========================================= */
 router.post("/dev/grant-access", authMiddleware, express.json(), async (_req: Request, res: Response) => {
   try {
-    const isProd = (process.env.NODE_ENV || "development") === "production";
-    if (isProd) return fail(res, 403, "forbidden");
+    // ✅ УБРАЛИ ПРОВЕРКУ PRODUCTION
+    // const isProd = (process.env.NODE_ENV || "development") === "production";
+    // if (isProd) return fail(res, 403, "forbidden");
 
     const u = await User.findById((res.locals.user as IUser)._id).exec();
     if (!u) return fail(res, 404, "user_not_found");
