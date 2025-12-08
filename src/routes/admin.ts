@@ -3,6 +3,7 @@ import express, { type Request, type Response, type Router, type NextFunction } 
 import mongoose, { Types } from "mongoose";
 import { authMiddleware } from "../middlewares/auth.middleware.js";
 import { adminOnly } from "../middlewares/adminOnly.middleware.js";
+import { DeletedBot } from "../models/DeletedBot.js";  // ← ДОБАВИТЬ
 
 import { User } from "../models/User.js";
 import { Bot } from "../models/Bot.js";

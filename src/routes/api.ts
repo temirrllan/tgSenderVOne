@@ -10,8 +10,7 @@ import mongoose, { Types } from "mongoose";
 import qs from "qs";
 
 
-import { User, Bot, Group, TxHistory, type IUser } from "../models/index.js";
-
+import { User, Bot, Group, TxHistory, DeletedBot, type IUser } from "../models/index.js";
 const router: Router = express.Router();
 
 /* ──────────────────────────────────────────
