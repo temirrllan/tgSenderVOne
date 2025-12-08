@@ -928,6 +928,9 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
 
 /* =========================================
    14) POST /api/bots/:id/delete — удалить бота (soft) (владелец/админ)
+   - Создаем запись в DeletedBot
+   - Удаляем из Bot
+   - Убираем из User.bots
 ========================================= */
 router.post("/bots/:id/delete", authMiddleware, async (req, res) => {
   try {
@@ -935,30 +938,118 @@ router.post("/bots/:id/delete", authMiddleware, async (req, res) => {
     if (!currentUser) return fail(res, 401, "no_auth");
 
     const id = String(req.params.id ?? "");
-  if (!mongoose.isValidObjectId(id)) return fail(res, 400, "invalid_id");
+    if (!mongoose.isValidObjectId(id)) return fail(res, 400, "invalid_id");
 
     const bot = await Bot.findById(id).exec();
     if (!bot) return fail(res, 404, "bot_not_found");
 
     const isAdmin = (currentUser as any)?.isAdmin === true;
-    if (!isAdmin && String(bot.owner) !== String(currentUser._id)) return fail(res, 403, "forbidden");
-
-    // soft-delete
-    (bot as any).status = "deleted";
-    await bot.save();
-
-    // вычистим ссылку у владельца
-    const owner = await User.findById(bot.owner as unknown as Types.ObjectId).exec();
-    if (owner) {
-      owner.bots = (owner.bots || []).filter((bId) => String(bId) !== String(bot._id));
-      await owner.save();
+    if (!isAdmin && String(bot.owner) !== String(currentUser._id)) {
+      return fail(res, 403, "forbidden");
     }
 
-    return success(res, { _id: bot._id, status: (bot as any).status });
+    // Определяем тип удаления
+    const deletedByType: "owner" | "admin" = isAdmin ? "admin" : "owner";
+    
+    // Причина удаления (можно получить из body, если нужно)
+    const deletionReason = String(req.body?.reason || "").trim() || undefined;
+
+    // 1) Создаем запись в DeletedBot
+    await DeletedBot.createFromBot(
+      bot,
+      currentUser._id as Types.ObjectId,
+      deletedByType,
+      deletionReason
+    );
+
+    console.log("✅ Bot archived to DeletedBot:", {
+      botId: bot._id,
+      username: bot.username,
+      deletedBy: currentUser._id,
+      deletedByType,
+    });
+
+    // 2) Удаляем из основной таблицы Bot
+    await Bot.findByIdAndDelete(id).exec();
+
+    console.log("✅ Bot removed from main table:", bot._id);
+
+    // 3) Убираем бота из массива User.bots
+    const ownerId = bot.owner;
+    if (ownerId) {
+      const owner = await User.findById(ownerId).exec();
+      if (owner) {
+        owner.bots = (owner.bots || []).filter((bId) => String(bId) !== String(bot._id));
+        await owner.save();
+        console.log("✅ Bot removed from User.bots:", owner._id);
+      }
+    }
+
+    return success(res, { 
+      _id: bot._id, 
+      deleted: true,
+      archived: true,
+      message: "Бот успешно удален и архивирован"
+    });
   } catch (err) {
     console.error("POST /api/bots/:id/delete error", err);
     return fail(res, 500, "internal_error");
   }
 });
+/* =========================================
+   GET /api/bots/deleted — список удаленных ботов (свои)
+========================================= */
+router.get("/bots/deleted", authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const u = res.locals.user as IUser | undefined;
+    if (!u) return fail(res, 401, "user_not_found");
 
+    const limit = Math.min(Number(req.query.limit ?? 50), 200);
+    const offset = Math.max(Number(req.query.offset ?? 0), 0);
+
+    const [items, total] = await Promise.all([
+      DeletedBot.find({ owner: u._id })
+        .select("originalBotId username photoUrl deletedAt deletedByType sentCount")
+        .sort({ deletedAt: -1 })
+        .skip(offset)
+        .limit(limit)
+        .lean()
+        .exec(),
+      DeletedBot.countDocuments({ owner: u._id }).exec(),
+    ]);
+
+    return success(res, { items, total, limit, offset });
+  } catch (err) {
+    console.error("GET /api/bots/deleted error", err);
+    return fail(res, 500, "internal_error");
+  }
+});
+
+/* =========================================
+   GET /api/bots/deleted/:id — детали удаленного бота
+========================================= */
+router.get("/bots/deleted/:id", authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const u = res.locals.user as IUser | undefined;
+    if (!u) return fail(res, 401, "user_not_found");
+
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) return fail(res, 400, "invalid_id");
+
+    const isAdmin = (u as any)?.isAdmin === true;
+
+    const bot = await DeletedBot.findById(id).lean().exec();
+    
+    if (!bot) return fail(res, 404, "bot_not_found");
+    
+    if (!isAdmin && String(bot.owner) !== String(u._id)) {
+      return fail(res, 403, "forbidden");
+    }
+
+    return success(res, { bot });
+  } catch (err) {
+    console.error("GET /api/bots/deleted/:id error", err);
+    return fail(res, 500, "internal_error");
+  }
+});
 export default router;
