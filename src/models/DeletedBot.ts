@@ -7,6 +7,7 @@ export interface IDeletedBot extends Document {
   // Оригинальные данные бота
   originalBotId: Types.ObjectId;
   owner: Types.ObjectId;
+  ownerTgId: number;  // ✅ Добавили tgId владельца
   username: string;
   photoUrl?: string;
   messageText: string;
@@ -23,6 +24,7 @@ export interface IDeletedBot extends Document {
   
   // Метаданные удаления
   deletedBy: Types.ObjectId;
+  deletedByTgId: number;  // ✅ Добавили tgId того кто удалил
   deletedByType: "owner" | "admin";
   deletionReason?: string;
   
@@ -58,6 +60,11 @@ const DeletedBotSchema = new Schema<IDeletedBot>(
       required: true, 
       index: true 
     },
+    ownerTgId: {  // ✅ Добавили tgId владельца
+      type: Number,
+      required: true,
+      index: true
+    },
     username: { 
       type: String, 
       required: true, 
@@ -76,6 +83,7 @@ const DeletedBotSchema = new Schema<IDeletedBot>(
       type: String,
       enum: ["awaiting_payment", "active", "blocked", "deleted"],
       required: true,
+      default: "deleted"  // ✅ По умолчанию "deleted"
     },
     chats: { 
       type: [Number], 
@@ -104,6 +112,11 @@ const DeletedBotSchema = new Schema<IDeletedBot>(
       ref: "User", 
       required: true,
       index: true 
+    },
+    deletedByTgId: {  // ✅ Добавили tgId того кто удалил
+      type: Number,
+      required: true,
+      index: true
     },
     deletedByType: { 
       type: String, 
@@ -139,6 +152,8 @@ const DeletedBotSchema = new Schema<IDeletedBot>(
 DeletedBotSchema.index({ owner: 1, deletedAt: -1 });
 DeletedBotSchema.index({ deletedBy: 1, deletedAt: -1 });
 DeletedBotSchema.index({ deletedAt: -1 });
+DeletedBotSchema.index({ ownerTgId: 1 });  // ✅ Индекс по tgId владельца
+DeletedBotSchema.index({ deletedByTgId: 1 });  // ✅ Индекс по tgId удалившего
 
 // ✅ Статический метод с правильной типизацией
 DeletedBotSchema.statics.createFromBot = async function(
@@ -147,14 +162,27 @@ DeletedBotSchema.statics.createFromBot = async function(
   deletedByType: "owner" | "admin",
   deletionReason?: string
 ): Promise<IDeletedBot> {
+  // ✅ Получаем пользователей для tgId
+  const { User } = await import("./User.js");
+  
+  const [ownerDoc, deleterDoc] = await Promise.all([
+    User.findById(bot.owner).select("tgId").lean(),
+    User.findById(deletedBy).select("tgId").lean()
+  ]);
+  
+  if (!ownerDoc || !deleterDoc) {
+    throw new Error("Owner or deleter not found");
+  }
+  
   return this.create({
     originalBotId: bot._id,
     owner: bot.owner,
+    ownerTgId: ownerDoc.tgId,  // ✅ Сохраняем tgId владельца
     username: bot.username,
     photoUrl: bot.photoUrl,
     messageText: bot.messageText,
     interval: bot.interval,
-    status: bot.status,
+    status: "deleted",  // ✅ Принудительно ставим "deleted"
     chats: bot.chats || [],
     groups: bot.groups || [],
     sentCount: bot.sentCount || 0,
@@ -162,6 +190,7 @@ DeletedBotSchema.statics.createFromBot = async function(
     lastRunAt: bot.lastRunAt,
     nextRunAt: bot.nextRunAt,
     deletedBy,
+    deletedByTgId: deleterDoc.tgId,  // ✅ Сохраняем tgId удалившего
     deletedByType,
     deletionReason,
     botCreatedAt: bot.createdAt,
