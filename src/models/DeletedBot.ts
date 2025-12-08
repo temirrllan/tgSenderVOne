@@ -1,13 +1,12 @@
 // backend/src/models/DeletedBot.ts
-import { Schema, model, Document, Types } from "mongoose";
+import { Schema, model, Document, Types, Model } from "mongoose";
 
 export type BotStatus = "awaiting_payment" | "active" | "blocked" | "deleted";
-export type ChatType = "group" | "supergroup" | "channel";
 
 export interface IDeletedBot extends Document {
   // Оригинальные данные бота
-  originalBotId: Types.ObjectId;  // ID из основной таблицы Bot
-  owner: Types.ObjectId;           // User
+  originalBotId: Types.ObjectId;
+  owner: Types.ObjectId;
   username: string;
   photoUrl?: string;
   messageText: string;
@@ -23,16 +22,26 @@ export interface IDeletedBot extends Document {
   nextRunAt?: Date;
   
   // Метаданные удаления
-  deletedBy: Types.ObjectId;       // кто удалил (owner или admin)
+  deletedBy: Types.ObjectId;
   deletedByType: "owner" | "admin";
-  deletionReason?: string;         // опциональная причина
+  deletionReason?: string;
   
   // Даты
-  botCreatedAt: Date;              // когда бот был создан
-  botUpdatedAt: Date;              // последнее обновление бота
-  deletedAt: Date;                 // когда удален
+  botCreatedAt: Date;
+  botUpdatedAt: Date;
+  deletedAt: Date;
   
-  createdAt: Date;                 // дата записи в DeletedBot
+  createdAt: Date;
+}
+
+// ✅ Интерфейс для статических методов модели
+interface IDeletedBotModel extends Model<IDeletedBot> {
+  createFromBot(
+    bot: any,
+    deletedBy: Types.ObjectId,
+    deletedByType: "owner" | "admin",
+    deletionReason?: string
+  ): Promise<IDeletedBot>;
 }
 
 const DeletedBotSchema = new Schema<IDeletedBot>(
@@ -120,9 +129,9 @@ const DeletedBotSchema = new Schema<IDeletedBot>(
     },
   },
   { 
-    timestamps: true,  // создаст createdAt и updatedAt для записи в DeletedBot
+    timestamps: true,
     versionKey: false,
-    collection: "deleted_bots"  // явное имя коллекции
+    collection: "deleted_bots"
   }
 );
 
@@ -131,13 +140,13 @@ DeletedBotSchema.index({ owner: 1, deletedAt: -1 });
 DeletedBotSchema.index({ deletedBy: 1, deletedAt: -1 });
 DeletedBotSchema.index({ deletedAt: -1 });
 
-// Статический метод для создания записи из бота
+// ✅ Статический метод с правильной типизацией
 DeletedBotSchema.statics.createFromBot = async function(
   bot: any, 
   deletedBy: Types.ObjectId, 
   deletedByType: "owner" | "admin",
   deletionReason?: string
-) {
+): Promise<IDeletedBot> {
   return this.create({
     originalBotId: bot._id,
     owner: bot.owner,
@@ -161,4 +170,5 @@ DeletedBotSchema.statics.createFromBot = async function(
   });
 };
 
-export const DeletedBot = model<IDeletedBot>("DeletedBot", DeletedBotSchema);
+// ✅ Экспортируем с правильным типом модели
+export const DeletedBot = model<IDeletedBot, IDeletedBotModel>("DeletedBot", DeletedBotSchema);
