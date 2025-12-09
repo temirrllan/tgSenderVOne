@@ -125,7 +125,7 @@ export async function authMiddleware(
         username: telegramUse.username || "",
         firstName: telegramUse.first_name || "",
         lastName: telegramUse.last_name || "",
-        avatarUrl: telegramUse.photo_url || "",
+        avatarUrl: telegramUse.photo_url || "", 
       });
       
       console.log("✅ [AUTH] New user created:", { 
@@ -152,15 +152,22 @@ export async function authMiddleware(
       }
 
       // Аватар: обновляем только если в БД пусто
-      const hasAvatarInDb = typeof (user as any).avatarUrl === "string" 
-        && (user as any).avatarUrl.trim().length > 0;
       const tgPhotoUrl = typeof telegramUse.photo_url === "string" 
         ? telegramUse.photo_url.trim() 
         : "";
 
-      if (!hasAvatarInDb && tgPhotoUrl) {
-        (user as any).avatarUrl = tgPhotoUrl;
-        needSave = true;
+      // Если есть новый аватар из TG - всегда обновляем
+      if (tgPhotoUrl) {
+        const currentAvatar = typeof (user as any).avatarUrl === "string" 
+          ? (user as any).avatarUrl.trim() 
+          : "";
+        
+        // Обновляем только если URL изменился
+        if (currentAvatar !== tgPhotoUrl) {
+          (user as any).avatarUrl = tgPhotoUrl;
+          needSave = true;
+          console.log("🖼️ [AUTH] Updating avatar:", tgPhotoUrl);
+        }
       }
 
       if (needSave) {

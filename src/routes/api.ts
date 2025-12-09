@@ -185,20 +185,26 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
       return fail(res, 401, "user_not_found");
     }
 
-    // 👀 лог — посмотреть, что реально лежит в бд
-    console.log("GET /api/me user.avatarUrl RAW =", (user as any).avatarUrl);
+    // 👀 Проверяем avatarUrl в сырых данных
+    console.log("🔍 GET /api/me - Raw user data:", {
+      avatarUrl: (user as any).avatarUrl,
+      type: typeof (user as any).avatarUrl,
+      hasField: 'avatarUrl' in user,
+    });
 
     const fullName =
       [user.firstName, user.lastName].filter(Boolean).join(" ") ||
       user.username ||
       `user${user.tgId}`;
 
-    // аккуратно нормализуем аватар
+    // ✅ Аккуратно извлекаем avatarUrl
     const rawAvatar = (user as any).avatarUrl;
     const avatarUrl =
-      typeof rawAvatar === "string" && rawAvatar.trim()
+      typeof rawAvatar === "string" && rawAvatar.trim().length > 0
         ? rawAvatar.trim()
         : null;
+
+    console.log("✅ GET /api/me - Processed avatarUrl:", avatarUrl);
 
     const data = {
       tgId: user.tgId,
@@ -206,7 +212,7 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
       firstName: user.firstName ?? null,
       lastName: user.lastName ?? null,
       fullName,
-      avatarUrl,
+      avatarUrl, // ✅ Теперь точно будет null или строка
 
       status: user.status,
       hasAccess: !!user.hasAccess,
@@ -222,7 +228,12 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
       createdAt: user.createdAt,
     };
 
-    console.log("✅ GET /api/me - sending response:", data);
+    console.log("✅ GET /api/me - sending response with data:", {
+      tgId: data.tgId,
+      username: data.username,
+      hasAccess: data.hasAccess,
+      avatarUrl: data.avatarUrl,
+    });
 
     return success(res, { user: data });
   } catch (err) {
