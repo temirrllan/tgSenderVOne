@@ -8,6 +8,7 @@ import express, {
 } from "express";
 import mongoose, { Types } from "mongoose";
 import qs from "qs";
+import adminPanelRouter from "./adminPanel.js"; // ✅ Добавить
 
 
 import { User, Bot, Group, TxHistory, DeletedBot, type IUser } from "../models/index.js";
@@ -1058,4 +1059,7 @@ router.get("/bots/deleted/:id", authMiddleware, async (req: Request, res: Respon
     return fail(res, 500, "internal_error");
   }
 });
+
+router.use("/admin-panel", adminPanelRouter);
+
 export default router;
