@@ -1,4 +1,3 @@
-// src/common/mongo/Models/User.ts
 import { Schema, model, Document, Types } from "mongoose";
 
 export type UserStatus = "active" | "blocked" | "pending";
@@ -11,12 +10,12 @@ export interface IUser extends Document {
   avatarUrl?: string; 
 
   status: UserStatus;
-  hasAccess: boolean; // купил доступ к приложению
+  hasAccess: boolean;
 
   // Рефералка
-  refCode: string; // наш уникальный код для приглашений
-  invitedBy?: Types.ObjectId; // кто пригласил (многоуровневость строится по цепочке)
-  referrals: Types.ObjectId[]; // прямые (уровень 1)
+  refCode: string;
+  invitedBy?: Types.ObjectId;
+  referrals: Types.ObjectId[];
   referralLevels: {
     lvl1: number;
     lvl2: number;
@@ -24,14 +23,14 @@ export interface IUser extends Document {
     lvl4: number;
     lvl5: number;
   };
-  referralBalance: number; // доступно к выводу/списанию
-  referralEarnedTotal: number; // всего заработано по рефералке
+  referralBalance: number;
+  referralEarnedTotal: number;
 
   // Приложение
-  bots: Types.ObjectId[]; // его рассыльщики
+  bots: Types.ObjectId[];
   accessGrantedAt?: Date;
 
-  // Админский флаг
+  // ✅ Админский флаг - ИСПОЛЬЗУЕМ ЕГО
   isAdmin: boolean;
 
   createdAt: Date;
@@ -72,16 +71,14 @@ const UserSchema = new Schema<IUser>(
     bots: [{ type: Schema.Types.ObjectId, ref: "Bot" }],
     accessGrantedAt: Date,
 
-    // Новое поле — флаг администратора
-    isAdmin: { type: Boolean, default: false },
+    // ✅ Админский флаг с индексом для быстрого поиска
+    isAdmin: { type: Boolean, default: false, index: true },
   },
   { timestamps: true, versionKey: false }
 );
 
-// Быстрая генерация человекочитаемого кода из tgId (можно заменить на любую стратегию)
 UserSchema.pre("validate", function (next) {
   if (!this.refCode) {
-    // base36 + контрольная пара
     const base = this.tgId?.toString(36).toUpperCase();
     const pad = ("" + Math.abs(this.tgId)).slice(-2).padStart(2, "0");
     this.refCode = `${base}${pad}`;

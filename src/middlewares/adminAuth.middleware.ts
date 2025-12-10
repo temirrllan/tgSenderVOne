@@ -1,6 +1,6 @@
 // backend/src/middlewares/adminAuth.middleware.ts
 import type { Request, Response, NextFunction } from "express";
-import { Admin } from "../models/Admin.js";
+import { User } from "../models/User.js";
 import { verifyTelegramWebAppData } from "../utils/telegram.js";
 import { isDev } from "../config/env.js";
 import qs from "qs";
@@ -11,7 +11,8 @@ export interface AdminAuthRequest extends Request {
 }
 
 /**
- * Middleware авторизации админов через Telegram WebApp
+ * Middleware авторизации админов через User.isAdmin
+ * Проверяет что пользователь существует и имеет флаг isAdmin: true
  */
 export async function adminAuthMiddleware(
   req: AdminAuthRequest,
@@ -103,11 +104,21 @@ export async function adminAuthMiddleware(
       }
     }
     
-    // Ищем админа в БД
-    let admin = await Admin.findOne({ telegramId: telegramUserId }).exec();
+    // ✅ Ищем пользователя по tgId в таблице User
+    let user = await User.findOne({ tgId: telegramUserId }).exec();
     
-    if (!admin) {
-      console.log("❌ [ADMIN AUTH] Admin not found:", telegramUserId);
+    if (!user) {
+      console.log("❌ [ADMIN AUTH] User not found:", telegramUserId);
+      return res.status(403).json({
+        success: false,
+        error: "access_denied",
+        message: "You are not registered",
+      });
+    }
+
+    // ✅ ГЛАВНАЯ ПРОВЕРКА: проверяем флаг isAdmin
+    if (!user.isAdmin) {
+      console.log("❌ [ADMIN AUTH] User is not admin:", telegramUserId);
       return res.status(403).json({
         success: false,
         error: "access_denied",
@@ -115,30 +126,21 @@ export async function adminAuthMiddleware(
       });
     }
 
-    if (!admin.isActive) {
-      console.log("❌ [ADMIN AUTH] Admin is not active:", telegramUserId);
-      return res.status(403).json({
-        success: false,
-        error: "access_denied",
-        message: "Your admin access is disabled",
-      });
-    }
-
-    // Обновляем данные админа из Telegram
+    // Обновляем данные пользователя из Telegram
     let needSave = false;
 
-    if (telegramUser.username && telegramUser.username !== admin.username) {
-      admin.username = telegramUser.username;
+    if (telegramUser.username && telegramUser.username !== user.username) {
+      user.username = telegramUser.username;
       needSave = true;
     }
 
-    if (telegramUser.first_name && telegramUser.first_name !== admin.firstName) {
-      admin.firstName = telegramUser.first_name;
+    if (telegramUser.first_name && telegramUser.first_name !== user.firstName) {
+      user.firstName = telegramUser.first_name;
       needSave = true;
     }
 
-    if (telegramUser.last_name && telegramUser.last_name !== admin.lastName) {
-      admin.lastName = telegramUser.last_name;
+    if (telegramUser.last_name && telegramUser.last_name !== user.lastName) {
+      user.lastName = telegramUser.last_name;
       needSave = true;
     }
 
@@ -148,34 +150,30 @@ export async function adminAuthMiddleware(
       : "";
 
     if (tgPhotoUrl) {
-      const currentAvatar = typeof admin.avatarUrl === "string" 
-        ? admin.avatarUrl.trim() 
+      const currentAvatar = typeof user.avatarUrl === "string" 
+        ? user.avatarUrl.trim() 
         : "";
       
       if (currentAvatar !== tgPhotoUrl) {
-        admin.avatarUrl = tgPhotoUrl;
+        user.avatarUrl = tgPhotoUrl;
         needSave = true;
       }
     }
 
-    // Обновляем lastLoginAt
-    admin.lastLoginAt = new Date();
-    needSave = true;
-
     if (needSave) {
-      await admin.save();
-      console.log("✅ [ADMIN AUTH] Admin data updated");
+      await user.save();
+      console.log("✅ [ADMIN AUTH] User data updated");
     }
     
     // Прикрепляем к req и res.locals
-    req.admin = admin;
+    req.admin = user;
     req.tgAdmin = telegramUser;
-    res.locals.admin = admin;
+    res.locals.admin = user;
     
     console.log("✅ [ADMIN AUTH] Middleware passed:", {
-      adminId: admin._id,
-      tgId: admin.telegramId,
-      role: admin.role,
+      userId: user._id,
+      tgId: user.tgId,
+      isAdmin: user.isAdmin,
     });
 
     next();

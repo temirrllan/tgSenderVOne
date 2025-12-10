@@ -2,7 +2,6 @@
 import express, { type Request, type Response, type Router } from "express";
 import mongoose from "mongoose";
 import { adminAuthMiddleware } from "../middlewares/adminAuth.middleware.js";
-import { Admin } from "../models/Admin.js";
 import { User } from "../models/User.js";
 import { Bot } from "../models/Bot.js";
 import { DeletedBot } from "../models/DeletedBot.js";
@@ -32,14 +31,12 @@ router.get("/me", async (_req: Request, res: Response) => {
     
     return success(res, {
       admin: {
-        telegramId: admin.telegramId,
+        tgId: admin.tgId,
         username: admin.username,
         firstName: admin.firstName,
         lastName: admin.lastName,
         avatarUrl: admin.avatarUrl,
-        role: admin.role,
-        isActive: admin.isActive,
-        lastLoginAt: admin.lastLoginAt,
+        isAdmin: admin.isAdmin,
         createdAt: admin.createdAt,
       }
     });
@@ -69,7 +66,7 @@ router.get("/stats", async (_req: Request, res: Response) => {
       Bot.countDocuments().exec(),
       Bot.countDocuments({ status: "active" }).exec(),
       DeletedBot.countDocuments().exec(),
-      Admin.countDocuments({ isActive: true }).exec(),
+      User.countDocuments({ isAdmin: true }).exec(),
     ]);
 
     return success(res, {
@@ -119,7 +116,7 @@ router.get("/users", async (req: Request, res: Response) => {
 
     const [items, total] = await Promise.all([
       User.find(query)
-        .select("tgId username firstName lastName status hasAccess createdAt")
+        .select("tgId username firstName lastName status hasAccess isAdmin createdAt")
         .sort({ createdAt: -1 })
         .skip(offset)
         .limit(limit)
@@ -244,7 +241,7 @@ router.get("/bots/deleted", async (req: Request, res: Response) => {
     const [items, total] = await Promise.all([
       DeletedBot.find()
         .populate("owner", "tgId username firstName")
-        .populate("deletedBy", "telegramId username firstName")
+        .populate("deletedBy", "tgId username firstName")
         .select("username deletedAt deletedByType sentCount errorCount")
         .sort({ deletedAt: -1 })
         .skip(offset)

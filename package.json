@@ -10,7 +10,8 @@
     "start:prod": "NODE_ENV=production node dist/index.js",
     "type-check": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "create-admin": "tsx src/scripts/create-admin.ts" 
+    "create-admin": "tsx src/scripts/create-admin.ts",
+    "make-admin": "tsx src/scripts/make-admin.ts"
   },
   "keywords": [],
   "author": "",
