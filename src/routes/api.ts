@@ -169,6 +169,8 @@ const authMiddleware: RequestHandler = async (req: Request, res: Response, next:
 /* =========================================
    GET /api/me — профиль пользователя (mini-app)
 ========================================= */
+// backend/src/routes/api.ts
+
 router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
   try {
     const user = res.locals.user as IUser | undefined;
@@ -177,7 +179,8 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
       exists: !!user,
       tgId: user?.tgId,
       username: user?.username,
-      hasAccess: user?.hasAccess
+      hasAccess: user?.hasAccess,
+      isAdmin: user?.isAdmin, // ✅ Проверьте что это поле есть
     });
     
     if (!user) {
@@ -185,26 +188,16 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
       return fail(res, 401, "user_not_found");
     }
 
-    // 👀 Проверяем avatarUrl в сырых данных
-    console.log("🔍 GET /api/me - Raw user data:", {
-      avatarUrl: (user as any).avatarUrl,
-      type: typeof (user as any).avatarUrl,
-      hasField: 'avatarUrl' in user,
-    });
-
     const fullName =
       [user.firstName, user.lastName].filter(Boolean).join(" ") ||
       user.username ||
       `user${user.tgId}`;
 
-    // ✅ Аккуратно извлекаем avatarUrl
     const rawAvatar = (user as any).avatarUrl;
     const avatarUrl =
       typeof rawAvatar === "string" && rawAvatar.trim().length > 0
         ? rawAvatar.trim()
         : null;
-
-    console.log("✅ GET /api/me - Processed avatarUrl:", avatarUrl);
 
     const data = {
       tgId: user.tgId,
@@ -212,10 +205,12 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
       firstName: user.firstName ?? null,
       lastName: user.lastName ?? null,
       fullName,
-      avatarUrl, // ✅ Теперь точно будет null или строка
+      avatarUrl,
 
       status: user.status,
       hasAccess: !!user.hasAccess,
+      isAdmin: !!user.isAdmin, // ✅ ВАЖНО: возвращаем isAdmin
+      
       referral: {
         code: user.refCode,
         directCount: Array.isArray(user.referrals) ? user.referrals.length : 0,
@@ -228,10 +223,11 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
       createdAt: user.createdAt,
     };
 
-    console.log("✅ GET /api/me - sending response with data:", {
+    console.log("✅ GET /api/me - sending response:", {
       tgId: data.tgId,
       username: data.username,
       hasAccess: data.hasAccess,
+      isAdmin: data.isAdmin, // ✅ Логируем isAdmin
       avatarUrl: data.avatarUrl,
     });
 
