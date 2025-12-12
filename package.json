@@ -1,8 +1,9 @@
 {
   "name": "tgsendervone",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Telegram Sender Bot with real account creation",
+  "main": "dist/index.js",
+  "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
@@ -13,12 +14,17 @@
     "create-admin": "tsx src/scripts/create-admin.ts",
     "make-admin": "tsx src/scripts/make-admin.ts"
   },
-  "keywords": [],
+  "keywords": [
+    "telegram",
+    "bot",
+    "sender",
+    "automation"
+  ],
   "author": "",
   "license": "ISC",
-  "type": "module",
   "dependencies": {
     "@grammyjs/parse-mode": "^2.2.0",
+    "axios": "^1.13.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
@@ -27,11 +33,13 @@
     "express": "^5.1.0",
     "grammy": "^1.38.3",
     "helmet": "^8.1.0",
+    "input": "^1.0.1",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.19.2",
     "morgan": "^1.10.1",
     "node-cron": "^4.2.1",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "telegram": "^2.25.15"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.9",
