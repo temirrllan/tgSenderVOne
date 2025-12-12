@@ -1,13 +1,9 @@
 // backend/src/services/bot-sender.service.ts
-// Упрощенная версия без сложных типов
-
 import { TelegramClient } from 'telegram';
+import { StringSession } from 'telegram/sessions';
+import { Api } from 'telegram/tl';
 import { Bot } from '../models/Bot.js';
 import { ENV } from '../config/env.js';
-
-// Динамические импорты
-const StringSession = (await import('telegram/sessions/index.js')).StringSession;
-const Api = (await import('telegram/tl/index.js')).Api;
 
 const API_ID = Number(ENV.TELEGRAM_API_ID);
 const API_HASH = ENV.TELEGRAM_API_HASH;
@@ -32,8 +28,9 @@ export async function sendMessageFromBot(
 
   console.log(`📤 Sending message from bot @${bot.username} to chat ${chatId}`);
 
-  // Восстанавливаем сессию
+  // ✅ ИСПРАВЛЕНО: StringSession принимает строку сессии
   const session = new StringSession(bot.sessionString);
+  
   const client = new TelegramClient(session, API_ID, API_HASH, {
     connectionRetries: 5,
   });
@@ -83,7 +80,9 @@ export async function broadcastMessage(botId: string): Promise<void> {
   console.log(`   Message: ${bot.messageText.slice(0, 50)}...`);
   console.log(`   Chats count: ${bot.chats?.length || 0}`);
 
-  const session = new StringSession(bot.sessionString);
+  // ✅ ИСПРАВЛЕНО: StringSession принимает строку сессии
+  const session = new StringSession(bot.sessionString || '');
+  
   const client = new TelegramClient(session, API_ID, API_HASH, {
     connectionRetries: 5,
   });
@@ -138,7 +137,9 @@ export async function joinChat(
     throw new Error('Bot not found');
   }
 
-  const session = new StringSession(bot.sessionString);
+  // ✅ ИСПРАВЛЕНО: StringSession принимает строку сессии
+  const session = new StringSession(bot.sessionString || '');
+  
   const client = new TelegramClient(session, API_ID, API_HASH, {
     connectionRetries: 5,
   });
@@ -147,11 +148,11 @@ export async function joinChat(
     await client.connect();
     
     // Присоединяемся к чату по ссылке
-    const result: any = await client.invoke(
-      new (Api as any).messages.ImportChatInvite({
+    const result = await client.invoke(
+      new Api.messages.ImportChatInvite({
         hash: inviteLink.split('/').pop() || inviteLink,
       })
-    );
+    ) as any;
 
     let chat: any;
     if (result.chats && result.chats.length > 0) {
@@ -188,14 +189,16 @@ export async function getBotInfo(sessionString: string): Promise<{
   firstName?: string;
   phone?: string;
 }> {
+  // ✅ ИСПРАВЛЕНО: StringSession принимает строку сессии
   const session = new StringSession(sessionString);
+  
   const client = new TelegramClient(session, API_ID, API_HASH, {
     connectionRetries: 5,
   });
 
   try {
     await client.connect();
-    const me: any = await client.getMe();
+    const me = await client.getMe() as any;
     
     return {
       id: me.id?.toString() || '',

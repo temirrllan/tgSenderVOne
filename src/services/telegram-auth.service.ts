@@ -1,14 +1,11 @@
 // backend/src/services/telegram-auth.service.ts
-// Упрощенная версия без сложных типов
-
 import { TelegramClient } from 'telegram';
+import { StringSession } from 'telegram/sessions';
+import { Api } from 'telegram/tl';
 import { ENV } from '../config/env.js';
 import { getSmsCode } from './phone.service.js';
-import * as fs from 'fs';
-
-// Динамические импорты для избежания проблем с типами
-const StringSession = (await import('telegram/sessions/index.js')).StringSession;
-const Api = (await import('telegram/tl/index.js')).Api;
+import fs from 'fs';
+import path from 'path';
 
 const API_ID = Number(ENV.TELEGRAM_API_ID);
 const API_HASH = ENV.TELEGRAM_API_HASH;
@@ -35,7 +32,9 @@ export async function createTelegramAccount(
   console.log('🤖 Starting Telegram account creation...');
   console.log('📞 Phone:', phoneNumber);
 
-  const session = new StringSession('');
+  // ✅ ИСПРАВЛЕНО: StringSession принимает строку, а не экземпляр
+  const session = new StringSession(''); // пустая строка для новой сессии
+  
   const client = new TelegramClient(session, API_ID, API_HASH, {
     connectionRetries: 5,
   });
@@ -66,11 +65,11 @@ export async function createTelegramAccount(
 
     console.log('✅ Successfully connected to Telegram');
 
-    // Получаем session string для сохранения
-    const sessionString = client.session.save() as unknown as string;
+    // ✅ ИСПРАВЛЕНО: Правильное получение session string
+    const sessionString = session.save() as string;
     
     // Получаем информацию о созданном аккаунте
-    const me: any = await client.getMe();
+    const me = await client.getMe() as any;
 
     console.log('✅ Account created:', {
       id: me.id?.toString() || 'unknown',
@@ -111,7 +110,9 @@ export async function restoreClient(sessionString: string): Promise<TelegramClie
     throw new Error('Telegram API credentials not configured');
   }
 
+  // ✅ ИСПРАВЛЕНО: StringSession принимает строку сессии
   const session = new StringSession(sessionString);
+  
   const client = new TelegramClient(session, API_ID, API_HASH, {
     connectionRetries: 5,
   });
@@ -139,7 +140,7 @@ export async function updateBotProfile(
     // Обновляем имя через invoke
     if (updates.firstName !== undefined) {
       await client.invoke(
-        new (Api as any).account.UpdateProfile({
+        new Api.account.UpdateProfile({
           firstName: updates.firstName,
           lastName: updates.lastName || '',
           about: updates.about || '',
@@ -150,23 +151,32 @@ export async function updateBotProfile(
 
     // Обновляем фото профиля
     if (updates.photoPath && fs.existsSync(updates.photoPath)) {
-      // Читаем файл как Buffer
+      // ✅ ИСПРАВЛЕНО: Правильная работа с файлами для GramJS
       const fileBuffer = fs.readFileSync(updates.photoPath);
+      const fileName = path.basename(updates.photoPath);
       
-      const file = await client.uploadFile({
-        file: fileBuffer,
+      // Создаём объект CustomFile для GramJS
+      const customFile = {
+        name: fileName,
+        size: fileBuffer.length,
+        buffer: fileBuffer,
+      };
+
+      const uploadedFile = await client.uploadFile({
+        file: customFile as any,
         workers: 1,
       });
 
       await client.invoke(
-        new (Api as any).photos.UploadProfilePhoto({
-          file: file,
+        new Api.photos.UploadProfilePhoto({
+          file: uploadedFile,
         })
       );
       console.log('✅ Profile photo updated');
     }
   } catch (error: any) {
     console.error('❌ Failed to update profile:', error);
+    throw error;
   } finally {
     await client.disconnect();
   }
