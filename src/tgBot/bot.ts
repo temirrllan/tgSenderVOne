@@ -51,7 +51,7 @@ const kbMain = (hasAccess: boolean, balance: number) =>
     .text(
       hasAccess 
         ? `✅ Доступ активен (Баланс: $${balance})` 
-        : `💳 Купить доступ ($${ACCESS_PRICE})`,
+        : `💳 Купить доступ ($50)`, // ✅ ИЗМЕНЕНО: теперь показывается цена
       hasAccess ? "balance" : "buy_access"
     );
 
@@ -351,7 +351,7 @@ bot.callbackQuery("buy_access", async (ctx) => {
       return;
     }
 
-    const ACCESS_PRICE_NUM = Number(ACCESS_PRICE);
+    const ACCESS_PRICE_NUM = 50; // ✅ Фиксированная цена доступа
 
     if (user.balance < ACCESS_PRICE_NUM) {
       const text =
@@ -372,7 +372,7 @@ bot.callbackQuery("buy_access", async (ctx) => {
       return;
     }
 
-    // Подтверждение покупки
+    // ✅ Подтверждение покупки
     const text =
       `<b>Подтвердите покупку</b>\n\n` +
       `Стоимость доступа: <b>$${ACCESS_PRICE_NUM}</b>\n` +
@@ -457,7 +457,7 @@ bot.callbackQuery("confirm_purchase", async (ctx) => {
       return;
     }
 
-    const ACCESS_PRICE_NUM = Number(ACCESS_PRICE);
+    const ACCESS_PRICE_NUM = 50;
 
     if (user.balance < ACCESS_PRICE_NUM) {
       await ctx.answerCallbackQuery({
@@ -467,7 +467,7 @@ bot.callbackQuery("confirm_purchase", async (ctx) => {
       return;
     }
 
-    // Списываем деньги и активируем доступ
+    // ✅ Списываем деньги и активируем доступ
     user.balance -= ACCESS_PRICE_NUM;
     user.hasAccess = true;
     user.accessGrantedAt = new Date();
@@ -477,7 +477,7 @@ bot.callbackQuery("confirm_purchase", async (ctx) => {
       `🎉 <b>Доступ активирован!</b>\n\n` +
       `Списано: <b>$${ACCESS_PRICE_NUM}</b>\n` +
       `Текущий баланс: <b>$${user.balance}</b>\n\n` +
-      `Теперь вы можете создавать ботов через приложение!`;
+      `Теперь вы можете использовать приложение!`;
 
     await safeEdit(ctx, text, kbMain(true, user.balance));
     await ctx.answerCallbackQuery({ text: "Доступ активирован!" });
