@@ -877,7 +877,7 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
     const u = res.locals.user as IUser | undefined;
     if (!u) return fail(res, 401, "user_not_found");
 
-    // доступ к мини-приложению оплачен?
+    // ✅ Проверка доступа к мини-приложению
     if (!u.hasAccess) return fail(res, 402, "access_required");
 
     const { username, messageText, interval, photoUrl } = req.body as Partial<{
@@ -887,7 +887,7 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
       photoUrl: string | null;
     }>;
 
-    // валидация
+    // Валидация
     if (!username) return fail(res, 400, "bad_username");
     if (!messageText) return fail(res, 400, "bad_messageText");
     if (typeof interval === "undefined") return fail(res, 400, "bad_interval");
@@ -895,11 +895,27 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
     const cleanUsername = String(username).replace(/^@/, "").trim();
     if (!cleanUsername) return fail(res, 400, "bad_username");
 
-    const allowed = [3600, 7200, 10800, 14400, 18000, 21600, 43200, 86400]; // сек: 1ч..24ч
+    const allowed = [3600, 7200, 10800, 14400, 18000, 21600, 43200, 86400];
     const intervalValue = Number(interval);
     if (!allowed.includes(intervalValue)) return fail(res, 400, "bad_interval");
 
-    // создаём
+    // ✅ НОВОЕ: Проверка баланса
+    const BOT_PRICE = 8; // Цена создания бота
+    
+    const user = await User.findById(u._id).exec();
+    if (!user) return fail(res, 404, "user_not_found");
+
+    if (user.balance < BOT_PRICE) {
+      return fail(res, 402, "insufficient_funds");
+    }
+
+    // ✅ НОВОЕ: Списываем деньги ПЕРЕД созданием бота
+    user.balance -= BOT_PRICE;
+    await user.save();
+
+    console.log(`✅ User ${user.tgId} paid $${BOT_PRICE} for bot creation. New balance: $${user.balance}`);
+
+    // Создаём бота
     const bot = new Bot({
       owner: u._id,
       username: cleanUsername,
@@ -913,7 +929,7 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
 
     await bot.save();
 
-    // привязываем к пользователю
+    // Привязываем к пользователю
     const freshUser = await User.findById(u._id).exec();
     if (freshUser) {
       freshUser.bots = Array.isArray(freshUser.bots) ? freshUser.bots : [];
@@ -928,7 +944,11 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
       .lean()
       .exec();
 
-    return success(res, { bot: dto }, 201);
+    return success(res, { 
+      bot: dto,
+      newBalance: user.balance, // ✅ Возвращаем новый баланс
+      paid: BOT_PRICE
+    }, 201);
   } catch (err) {
     console.error("POST /api/bots/create error", err);
     return fail(res, 500, "internal_error");

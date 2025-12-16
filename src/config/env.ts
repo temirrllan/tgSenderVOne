@@ -22,7 +22,7 @@ export const ENV = {
   CRYPTO_WALLET: process.env.CRYPTO_WALLET || "",
   ACCESS_PRICE: process.env.ACCESS_PRICE || "10",
   ACCESS_CURRENCY: process.env.ACCESS_CURRENCY || "USDT",
-  BOT_PRICE: Number(process.env.BOT_PRICE) || 10,
+BOT_PRICE: Number(process.env.BOT_PRICE) || 8,
   BOT_CURRENCY: process.env.BOT_CURRENCY || "USDT",
   
   // Mini App
