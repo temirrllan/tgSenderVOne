@@ -9,8 +9,7 @@ import express, {
 import mongoose, { Types } from "mongoose";
 import qs from "qs";
 import adminPanelRouter from "./adminPanel.js"; // ✅ Добавить
-import { buyPhoneNumber } from '../services/phone.service.js';
-import { createTelegramAccount } from '../services/telegram-auth.service.js';
+
 
 import { User, Bot, Group, TxHistory, DeletedBot, type IUser } from "../models/index.js";
 const router: Router = express.Router();
@@ -875,7 +874,7 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
     const u = res.locals.user as IUser | undefined;
     if (!u) return fail(res, 401, "user_not_found");
 
-    // Доступ к мини-приложению оплачен?
+    // доступ к мини-приложению оплачен?
     if (!u.hasAccess) return fail(res, 402, "access_required");
 
     const { username, messageText, interval, photoUrl } = req.body as Partial<{
@@ -885,7 +884,7 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
       photoUrl: string | null;
     }>;
 
-    // Валидация
+    // валидация
     if (!username) return fail(res, 400, "bad_username");
     if (!messageText) return fail(res, 400, "bad_messageText");
     if (typeof interval === "undefined") return fail(res, 400, "bad_interval");
@@ -893,52 +892,42 @@ router.post("/bots/create", authMiddleware, express.json(), async (req: Request,
     const cleanUsername = String(username).replace(/^@/, "").trim();
     if (!cleanUsername) return fail(res, 400, "bad_username");
 
-    const allowed = [3600, 7200, 10800, 14400, 18000, 21600, 43200, 86400];
+    const allowed = [3600, 7200, 10800, 14400, 18000, 21600, 43200, 86400]; // сек: 1ч..24ч
     const intervalValue = Number(interval);
     if (!allowed.includes(intervalValue)) return fail(res, 400, "bad_interval");
 
-    const BOT_PRICE = Number(process.env.BOT_PRICE || 5);
-    const BOT_CURRENCY = process.env.BOT_CURRENCY || "USDT";
-    const CRYPTO_WALLET = process.env.CRYPTO_WALLET || "";
-    
-    if (!CRYPTO_WALLET) return fail(res, 500, "wallet_not_configured");
-
-    // Создаём платёж
-    const code12 = generate12DigitCode();
-    const transaction = await TxHistory.create({
-      user: u._id as unknown as Types.ObjectId,
-      type: "BOT_PURCHASE",
-      status: "pending",
-      amount: BOT_PRICE,
-      currency: BOT_CURRENCY,
-      wallet: CRYPTO_WALLET,
-      code12,
-      meta: {
-        request: {
-          username: cleanUsername,
-          messageText: String(messageText).trim(),
-          interval: intervalValue,
-          photoUrl: photoUrl === null ? "" : (photoUrl ? String(photoUrl).trim() : ""),
-        },
-      },
+    // создаём
+    const bot = new Bot({
+      owner: u._id,
+      username: cleanUsername,
+      photoUrl: photoUrl === null ? "" : (photoUrl ? String(photoUrl).trim() : ""),
+      messageText: String(messageText).trim(),
+      interval: intervalValue as any,
+      status: "active",
+      groups: [],
+      chats: [],
     });
 
-    return success(
-      res,
-      {
-        txId: transaction._id,
-        wallet: CRYPTO_WALLET,
-        code12,
-        amount: BOT_PRICE,
-        currency: BOT_CURRENCY,
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-        note: "Оплатите и вернитесь для создания бота. Процесс займёт 2-3 минуты.",
-      },
-      201
-    );
-  } catch (err: unknown) {
-    const error = err as Error;
-    console.error("POST /api/bots/create error", error);
+    await bot.save();
+
+    // привязываем к пользователю
+    const freshUser = await User.findById(u._id).exec();
+    if (freshUser) {
+      freshUser.bots = Array.isArray(freshUser.bots) ? freshUser.bots : [];
+      if (!freshUser.bots.some((bId) => String(bId) === String(bot._id))) {
+        freshUser.bots.push(bot._id as any);
+        await freshUser.save();
+      }
+    }
+
+    const dto = await Bot.findById(bot._id)
+      .select("owner username photoUrl messageText interval status groups createdAt")
+      .lean()
+      .exec();
+
+    return success(res, { bot: dto }, 201);
+  } catch (err) {
+    console.error("POST /api/bots/create error", err);
     return fail(res, 500, "internal_error");
   }
 });
@@ -1073,187 +1062,4 @@ router.get("/bots/deleted/:id", authMiddleware, async (req: Request, res: Respon
 
 router.use("/admin-panel", adminPanelRouter);
 
-
-
-
-// backend/src/routes/api.ts
-
-router.post("/bots/create", authMiddleware, express.json(), async (req, res) => {
-  try {
-    const user = res.locals.user as IUser;
-    
-    if (!user.hasAccess) {
-      return fail(res, 402, "access_required");
-    }
-
-    const { username, messageText, interval, photoUrl } = req.body;
-
-    // Валидация...
-
-    const BOT_PRICE = Number(process.env.BOT_PRICE || 5);
-    
-    // ✅ ШАГ 1: Создаем платеж
-    const code12 = generate12DigitCode();
-    const transaction = await TxHistory.create({
-      user: user._id,
-      type: "BOT_PURCHASE",
-      status: "pending",
-      amount: BOT_PRICE,
-      currency: "USDT",
-      wallet: process.env.CRYPTO_WALLET,
-      code12,
-      meta: {
-        request: {
-          username,
-          messageText,
-          interval,
-          photoUrl,
-        }
-      }
-    });
-
-    // Возвращаем данные для оплаты
-    return success(res, {
-      txId: transaction._id,
-      wallet: process.env.CRYPTO_WALLET,
-      code12,
-      amount: BOT_PRICE,
-      currency: "USDT",
-      message: "Оплатите и нажмите 'Проверить оплату'"
-    }, 201);
-
-  } catch (err) {
-    console.error(err);
-    return fail(res, 500, "internal_error");
-  }
-});
-
-// ✅ ШАГ 2: После подтверждения оплаты - создаем реального бота
-router.post("/bots/create-from-payment/:txId", authMiddleware, async (req: Request, res: Response) => {
-  try {
-    const currentUser = res.locals.user as IUser | undefined;
-    if (!currentUser) return fail(res, 401, "no_auth");
-
-    const txId = String(req.params.txId ?? "");
-    if (!mongoose.isValidObjectId(txId)) return fail(res, 400, "invalid_tx_id");
-
-    const transaction = await TxHistory.findById(txId).exec();
-    
-    if (!transaction) {
-      return fail(res, 404, "tx_not_found");
-    }
-
-    if (String(transaction.user) !== String(currentUser._id)) {
-      return fail(res, 403, "forbidden");
-    }
-
-    if (transaction.type !== "BOT_PURCHASE") {
-      return fail(res, 400, "wrong_tx_type");
-    }
-
-    // Если уже создан бот - возвращаем его
-    if (transaction.bot) {
-      const existingBot = await Bot.findById(transaction.bot)
-        .select("owner username photoUrl messageText interval status phoneNumber createdAt")
-        .lean()
-        .exec();
-      return success(res, { bot: existingBot, reused: true });
-    }
-
-    // DEV: автоподтверждение pending платежей
-    if (transaction.status === "pending") {
-      await transaction.markConfirmed();
-    }
-
-    if (transaction.status !== "confirmed") {
-      return fail(res, 400, "tx_not_confirmed");
-    }
-
-    // Получаем данные из meta
-    const metaReq = transaction.meta?.request ?? {} as any;
-    const cleanUsername = String(metaReq.username || "").replace(/^@/, "").trim();
-    const messageText = String(metaReq.messageText || "").trim();
-    const interval = Number(metaReq.interval || 0);
-    const photoUrl = metaReq.photoUrl === null ? "" : metaReq.photoUrl ? String(metaReq.photoUrl).trim() : "";
-
-    if (!cleanUsername) return fail(res, 400, "bad_username_in_meta");
-    if (!messageText) return fail(res, 400, "bad_messageText_in_meta");
-
-    const allowed = [3600, 7200, 10800, 14400, 18000, 21600, 43200, 86400];
-    if (!allowed.includes(interval)) return fail(res, 400, "bad_interval_in_meta");
-
-    // ✅ СОЗДАНИЕ РЕАЛЬНОГО БОТА
-
-    console.log("🚀 Starting bot creation process...");
-
-    // Шаг 1: Покупаем номер телефона
-    console.log("📞 Step 1: Buying phone number...");
-    const phoneData = await buyPhoneNumber();
-    
-    // Шаг 2: Создаем Telegram аккаунт
-    console.log("🤖 Step 2: Creating Telegram account...");
-    const telegramData = await createTelegramAccount(phoneData.phoneNumber);
-    
-    // Шаг 3: Создаем запись в БД
-    console.log("💾 Step 3: Saving to database...");
-    const bot = await Bot.create({
-      owner: currentUser._id as any,
-      
-      // Реальные данные
-      phoneNumber: phoneData.phoneNumber,
-      telegramUserId: telegramData.userId,
-      sessionString: telegramData.sessionString,
-      
-      // Plivo
-      plivoNumberId: phoneData.phoneNumber,
-      plivoPurchaseId: phoneData.purchaseId,
-      monthlyRent: phoneData.monthlyRent,
-      
-      // Пользовательские настройки
-      username: cleanUsername,
-      messageText,
-      interval,
-      photoUrl,
-      
-      status: "active",
-      groups: [],
-      chats: [],
-      sentCount: 0,
-      errorCount: 0,
-    });
-
-    console.log("✅ Bot created successfully:", {
-      id: bot._id,
-      phone: bot.phoneNumber,
-      telegramId: bot.telegramUserId,
-    });
-
-    // Привязываем к пользователю
-    const freshUser = await User.findById(currentUser._id).exec();
-    if (freshUser) {
-      freshUser.bots = Array.isArray(freshUser.bots) ? freshUser.bots : [];
-      if (!freshUser.bots.some((bId) => String(bId) === String(bot._id))) {
-        freshUser.bots.push(bot._id as any);
-      }
-      await freshUser.save();
-    }
-
-    // Привязываем к транзакции
-    transaction.bot = bot._id as any;
-    await transaction.save();
-
-    // Возвращаем без sessionString (безопасность)
-    const dto = await Bot.findById(bot._id)
-      .select("owner username photoUrl messageText interval status phoneNumber telegramUserId createdAt")
-      .lean()
-      .exec();
-
-    return success(res, { bot: dto }, 201);
-
-  } catch (err: unknown) {
-    const error = err as Error;
-    console.error("❌ POST /bots/create-from-payment error:", error);
-    return fail(res, 500, error.message || "bot_creation_failed");
-  }
-});
 export default router;
