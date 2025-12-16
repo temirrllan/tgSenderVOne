@@ -42,13 +42,18 @@ type MyContext = Context & SessionFlavor<MySession>;
 const initialSession = (): MySession => ({});
 
 /* ========= Helpers ========= */
-const kbMain = (hasAccess: boolean) =>
+const kbMain = (hasAccess: boolean, balance: number) =>
   new InlineKeyboard()
     .webApp("📲 Открыть приложение", MINIAPP_URL)
     .row()
     .text("👥 Рефералка", "ref")
     .row()
-    .text(hasAccess ? "✅ Доступ активен" : "💳 Купить доступ", "buy_access");
+    .text(
+      hasAccess 
+        ? `✅ Доступ активен (Баланс: $${balance})` 
+        : `💳 Купить доступ ($${ACCESS_PRICE})`,
+      hasAccess ? "balance" : "buy_access"
+    );
 
 function generate12DigitCode(): string {
   const ts = Date.now().toString().slice(-8);
@@ -208,6 +213,7 @@ bot.command("start", async (ctx) => {
         ...baseProfile,
         status: "active",
         hasAccess: false,
+        balance: 0, 
       });
 
       // рефералка — привязываем только если есть валидный инвайтер и ещё не привязан
@@ -278,10 +284,11 @@ bot.command("start", async (ctx) => {
       `Привет, <b>${tg.first_name || "друг"}</b> 👋\n` +
       `Я — бот рассылок. Создавай своих ботов, настраивай интервал (1ч–24ч) и запускай рассылку.\n\n` +
       `• Ваш доступ: <b>${user.hasAccess ? "АКТИВЕН" : "НЕ ОПЛАЧЕН"}</b>\n` +
+      `• Ваш баланс: <b>$${user.balance}</b>\n` +
       `• Ваша реферальная ссылка: <code>${refLink}</code>\n\n` +
-      `Кнопка приложения ниже. Если доступа нет — внутри подскажем, как оплатить.`;
+      `Кнопка приложения ниже. ${!user.hasAccess ? "Для доступа нужно купить подписку." : ""}`;
 
-    await safeReply(ctx, text, kbMain(!!user.hasAccess));
+    await safeReply(ctx, text, kbMain(!!user.hasAccess, user.balance));
   } catch (e) {
     console.error(e);
     await ctx.reply("Упс, что-то пошло не так. Попробуйте ещё раз.");
@@ -339,27 +346,44 @@ bot.callbackQuery("buy_access", async (ctx) => {
     const user = await User.findOne({ tgId: ctx.from!.id });
     if (!user) return ctx.answerCallbackQuery({ text: "Сначала /start" });
 
-    const transaction = await createOrReusePendingAccess(
-      user._id as Types.ObjectId,
-      Number(ACCESS_PRICE),
-      ACCESS_CURRENCY,
-      CRYPTO_WALLET
-    );
+    if (user.hasAccess) {
+      await ctx.answerCallbackQuery({ text: "У вас уже есть доступ!" });
+      return;
+    }
 
+    const ACCESS_PRICE_NUM = Number(ACCESS_PRICE);
+
+    if (user.balance < ACCESS_PRICE_NUM) {
+      const text =
+        `<b>Недостаточно средств</b>\n\n` +
+        `Ваш баланс: <b>$${user.balance}</b>\n` +
+        `Необходимо: <b>$${ACCESS_PRICE_NUM}</b>\n` +
+        `Не хватает: <b>$${ACCESS_PRICE_NUM - user.balance}</b>\n\n` +
+        `Пополните баланс через кнопку ниже.`;
+
+      const kb = new InlineKeyboard()
+        .text("💰 Пополнить баланс", "topup")
+        .row()
+        .webApp("📲 Открыть приложение", MINIAPP_URL)
+        .row()
+        .text("◀️ Назад", "ref");
+
+      await safeEdit(ctx, text, kb);
+      return;
+    }
+
+    // Подтверждение покупки
     const text =
-      `<b>Оплата доступа</b>\n\n` +
-      `Сумма: <b>${ACCESS_PRICE} ${ACCESS_CURRENCY}</b>\n` +
-      `Кошелёк: <code>${CRYPTO_WALLET}</code>\n` +
-      `Ваш 12-значный код: <code>${transaction.code12}</code>\n\n` +
-      `⚠️ Обязательно укажите код в комментарии/мемо перевода.\n` +
-      `После отправки нажмите «Проверить оплату» — проверка занимает до 10 минут.`;
+      `<b>Подтвердите покупку</b>\n\n` +
+      `Стоимость доступа: <b>$${ACCESS_PRICE_NUM}</b>\n` +
+      `Ваш текущий баланс: <b>$${user.balance}</b>\n` +
+      `После покупки останется: <b>$${user.balance - ACCESS_PRICE_NUM}</b>\n\n` +
+      `Подтвердить покупку?`;
 
     const kb = new InlineKeyboard()
-      .text("✅ Я оплатил — проверить", `check_access_${transaction.code12}`)
+      .text("✅ Да, купить", "confirm_purchase")
       .row()
-      .webApp("📲 Открыть приложение", MINIAPP_URL)
-      .row()
-      .text("◀️ Назад", "ref");
+      .text("❌ Отмена", "ref");
 
     await safeEdit(ctx, text, kb);
   } catch (e) {
@@ -422,7 +446,94 @@ bot.callbackQuery(/^check_access_(\d{12})$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text: "Ошибка" });
   }
 });
+// ✅ 4. Подтверждение покупки
+bot.callbackQuery("confirm_purchase", async (ctx) => {
+  try {
+    const user = await User.findOne({ tgId: ctx.from!.id });
+    if (!user) return ctx.answerCallbackQuery({ text: "Сначала /start" });
 
+    if (user.hasAccess) {
+      await ctx.answerCallbackQuery({ text: "У вас уже есть доступ!" });
+      return;
+    }
+
+    const ACCESS_PRICE_NUM = Number(ACCESS_PRICE);
+
+    if (user.balance < ACCESS_PRICE_NUM) {
+      await ctx.answerCallbackQuery({
+        text: "Недостаточно средств",
+        show_alert: true,
+      });
+      return;
+    }
+
+    // Списываем деньги и активируем доступ
+    user.balance -= ACCESS_PRICE_NUM;
+    user.hasAccess = true;
+    user.accessGrantedAt = new Date();
+    await user.save();
+
+    const text =
+      `🎉 <b>Доступ активирован!</b>\n\n` +
+      `Списано: <b>$${ACCESS_PRICE_NUM}</b>\n` +
+      `Текущий баланс: <b>$${user.balance}</b>\n\n` +
+      `Теперь вы можете создавать ботов через приложение!`;
+
+    await safeEdit(ctx, text, kbMain(true, user.balance));
+    await ctx.answerCallbackQuery({ text: "Доступ активирован!" });
+  } catch (e) {
+    console.error(e);
+    await ctx.answerCallbackQuery({ text: "Ошибка" });
+  }
+});
+
+// ✅ 5. Кнопка "Баланс" (показывает баланс если доступ уже есть)
+bot.callbackQuery("balance", async (ctx) => {
+  try {
+    const user = await User.findOne({ tgId: ctx.from!.id });
+    if (!user) return ctx.answerCallbackQuery({ text: "Сначала /start" });
+
+    const text =
+      `<b>Ваш баланс</b>\n\n` +
+      `Текущий баланс: <b>$${user.balance}</b>\n` +
+      `Статус доступа: <b>${user.hasAccess ? "АКТИВЕН ✅" : "НЕ ОПЛАЧЕН ❌"}</b>\n\n` +
+      `Вы можете пополнить баланс для создания новых ботов.`;
+
+    const kb = new InlineKeyboard()
+      .text("💰 Пополнить баланс", "topup")
+      .row()
+      .webApp("📲 Открыть приложение", MINIAPP_URL)
+      .row()
+      .text("◀️ Назад", "ref");
+
+    await safeEdit(ctx, text, kb);
+  } catch (e) {
+    console.error(e);
+    await ctx.answerCallbackQuery({ text: "Ошибка" });
+  }
+});
+
+
+// ✅ 6. Заглушка пополнения баланса (пока без реальной оплаты)
+bot.callbackQuery("topup", async (ctx) => {
+  try {
+    const text =
+      `<b>Пополнение баланса</b>\n\n` +
+      `🚧 Функция в разработке\n\n` +
+      `Скоро здесь будут способы пополнения баланса через криптовалюту.`;
+
+    const kb = new InlineKeyboard()
+      .webApp("📲 Открыть приложение", MINIAPP_URL)
+      .row()
+      .text("◀️ Назад", "balance");
+
+    await safeEdit(ctx, text, kb);
+    await ctx.answerCallbackQuery({ text: "Функция в разработке" });
+  } catch (e) {
+    console.error(e);
+    await ctx.answerCallbackQuery({ text: "Ошибка" });
+  }
+});
 // Фолбэк
 bot.on("message", async (ctx) => {
   const user = await User.findOne({ tgId: ctx.from!.id });

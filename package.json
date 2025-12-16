@@ -12,7 +12,8 @@
     "type-check": "tsc --noEmit",
     "clean": "rm -rf dist",
     "create-admin": "tsx src/scripts/create-admin.ts",
-    "make-admin": "tsx src/scripts/make-admin.ts"
+    "make-admin": "tsx src/scripts/make-admin.ts",
+    "migrate:balance": "tsx src/scripts/add-balance-field.ts"
   },
   "keywords": [
     "telegram",

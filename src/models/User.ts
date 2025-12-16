@@ -1,3 +1,4 @@
+// backend/src/models/User.ts
 import { Schema, model, Document, Types } from "mongoose";
 
 export type UserStatus = "active" | "blocked" | "pending";
@@ -11,6 +12,9 @@ export interface IUser extends Document {
 
   status: UserStatus;
   hasAccess: boolean;
+  
+  // ✅ Добавляем баланс
+  balance: number; // в долларах
 
   // Рефералка
   refCode: string;
@@ -30,7 +34,6 @@ export interface IUser extends Document {
   bots: Types.ObjectId[];
   accessGrantedAt?: Date;
 
-  // ✅ Админский флаг - ИСПОЛЬЗУЕМ ЕГО
   isAdmin: boolean;
 
   createdAt: Date;
@@ -54,6 +57,9 @@ const UserSchema = new Schema<IUser>(
       index: true,
     },
     hasAccess: { type: Boolean, default: false },
+    
+    // ✅ Баланс (по умолчанию 0)
+    balance: { type: Number, default: 0, min: 0 },
 
     refCode: { type: String, required: true, unique: true, index: true },
     invitedBy: { type: Schema.Types.ObjectId, ref: "User" },
@@ -71,7 +77,6 @@ const UserSchema = new Schema<IUser>(
     bots: [{ type: Schema.Types.ObjectId, ref: "Bot" }],
     accessGrantedAt: Date,
 
-    // ✅ Админский флаг с индексом для быстрого поиска
     isAdmin: { type: Boolean, default: false, index: true },
   },
   { timestamps: true, versionKey: false }

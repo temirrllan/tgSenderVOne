@@ -200,29 +200,32 @@ router.get("/me", authMiddleware, async (_req: Request, res: Response) => {
         ? rawAvatar.trim()
         : null;
 
-    const data = {
-      tgId: user.tgId,
-      username: user.username ?? null,
-      firstName: user.firstName ?? null,
-      lastName: user.lastName ?? null,
-      fullName,
-      avatarUrl,
+    // В роуте GET /api/me добавляем balance в ответ
 
-      status: user.status,
-      hasAccess: !!user.hasAccess,
-      isAdmin: !!user.isAdmin, // ✅ ВАЖНО: возвращаем isAdmin
-      
-      referral: {
-        code: user.refCode,
-        directCount: Array.isArray(user.referrals) ? user.referrals.length : 0,
-        levels: user.referralLevels,
-        balance: user.referralBalance,
-        earnedTotal: user.referralEarnedTotal,
-      },
-      botsCount: Array.isArray(user.bots) ? user.bots.length : 0,
-      accessGrantedAt: user.accessGrantedAt ?? null,
-      createdAt: user.createdAt,
-    };
+const data = {
+  tgId: user.tgId,
+  username: user.username ?? null,
+  firstName: user.firstName ?? null,
+  lastName: user.lastName ?? null,
+  fullName,
+  avatarUrl,
+
+  status: user.status,
+  hasAccess: !!user.hasAccess,
+  isAdmin: !!user.isAdmin,
+  balance: user.balance || 0, // ✅ Добавляем баланс
+  
+  referral: {
+    code: user.refCode,
+    directCount: Array.isArray(user.referrals) ? user.referrals.length : 0,
+    levels: user.referralLevels,
+    balance: user.referralBalance,
+    earnedTotal: user.referralEarnedTotal,
+  },
+  botsCount: Array.isArray(user.bots) ? user.bots.length : 0,
+  accessGrantedAt: user.accessGrantedAt ?? null,
+  createdAt: user.createdAt,
+};
 
     console.log("✅ GET /api/me - sending response:", {
       tgId: data.tgId,
@@ -1059,7 +1062,102 @@ router.get("/bots/deleted/:id", authMiddleware, async (req: Request, res: Respon
     return fail(res, 500, "internal_error");
   }
 });
+// Добавить в backend/src/routes/api.ts после существующих роутов
 
+/* =========================================
+   POST /api/purchase-access — купить доступ за внутренний баланс
+========================================= */
+router.post("/purchase-access", authMiddleware, express.json(), async (req: Request, res: Response) => {
+  try {
+    const u = res.locals.user as IUser | undefined;
+    if (!u) return fail(res, 401, "user_not_found");
+
+    // Проверяем что доступа еще нет
+    if (u.hasAccess) {
+      return fail(res, 400, "already_has_access");
+    }
+
+    // Цена доступа из .env (по умолчанию 50)
+    const ACCESS_PRICE_NUM = Number(process.env.ACCESS_PRICE || 50);
+
+    // Проверяем баланс
+    const user = await User.findById(u._id).exec();
+    if (!user) return fail(res, 404, "user_not_found");
+
+    if (user.balance < ACCESS_PRICE_NUM) {
+      return fail(res, 402, "insufficient_funds");
+    }
+
+    // Списываем деньги
+    user.balance -= ACCESS_PRICE_NUM;
+    user.hasAccess = true;
+    user.accessGrantedAt = new Date();
+    
+    await user.save();
+
+    console.log(`✅ User ${user.tgId} purchased access for $${ACCESS_PRICE_NUM}`);
+
+    return success(res, {
+      hasAccess: true,
+      balance: user.balance,
+      accessGrantedAt: user.accessGrantedAt,
+      price: ACCESS_PRICE_NUM,
+    });
+  } catch (err) {
+    console.error("POST /api/purchase-access error", err);
+    return fail(res, 500, "internal_error");
+  }
+});
+
+/* =========================================
+   GET /api/balance — получить баланс пользователя
+========================================= */
+router.get("/balance", authMiddleware, async (_req: Request, res: Response) => {
+  try {
+    const u = res.locals.user as IUser | undefined;
+    if (!u) return fail(res, 401, "user_not_found");
+
+    const user = await User.findById(u._id).select("balance").lean().exec();
+    if (!user) return fail(res, 404, "user_not_found");
+
+    return success(res, { balance: user.balance });
+  } catch (err) {
+    console.error("GET /api/balance error", err);
+    return fail(res, 500, "internal_error");
+  }
+});
+
+/* =========================================
+   POST /api/dev/add-balance — (DEV) пополнить баланс для тестирования
+========================================= */
+router.post("/dev/add-balance", authMiddleware, express.json(), async (req: Request, res: Response) => {
+  try {
+    const isProd = (process.env.NODE_ENV || "development") === "production";
+    if (isProd) return fail(res, 403, "forbidden");
+
+    const u = res.locals.user as IUser | undefined;
+    if (!u) return fail(res, 401, "user_not_found");
+
+    const { amount } = req.body as { amount?: number };
+    const addAmount = Number(amount) || 100;
+
+    const user = await User.findById(u._id).exec();
+    if (!user) return fail(res, 404, "user_not_found");
+
+    user.balance += addAmount;
+    await user.save();
+
+    console.log(`✅ [DEV] Added $${addAmount} to user ${user.tgId}, new balance: $${user.balance}`);
+
+    return success(res, { 
+      balance: user.balance, 
+      added: addAmount 
+    });
+  } catch (err) {
+    console.error("POST /api/dev/add-balance error", err);
+    return fail(res, 500, "internal_error");
+  }
+});
 router.use("/admin-panel", adminPanelRouter);
 
 export default router;
