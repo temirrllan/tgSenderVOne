@@ -333,7 +333,7 @@ bot.callbackQuery("ref", async (ctx) => {
       )}</b> ${ACCESS_CURRENCY}\n\n` +
       `<b>Ваши приглашённые (первые 20):</b>\n${refsList}`;
 
-    await safeEdit(ctx, text, kbMain(!!user.hasAccess));
+    await safeEdit(ctx, text, kbMain(!!user.hasAccess, user.balance));
   } catch (e) {
     console.error(e);
     await ctx.answerCallbackQuery({ text: "Ошибка" });
@@ -421,10 +421,10 @@ bot.callbackQuery(/^check_access_(\d{12})$/, async (ctx) => {
       }
       await ctx.answerCallbackQuery({ text: "Оплата подтверждена!" });
       await safeEdit(
-        ctx,
-        `🎉 Доступ активирован!\nТеперь можете пользоваться приложением.`,
-        kbMain(true)
-      );
+  ctx,
+  `🎉 Доступ активирован!\nТеперь можете пользоваться приложением.`,
+  kbMain(true, user.balance)
+);
     } else if (tx.status === "pending") {
       await ctx.answerCallbackQuery({
         text: "Оплата ещё в обработке…",
@@ -538,7 +538,8 @@ bot.callbackQuery("topup", async (ctx) => {
 bot.on("message", async (ctx) => {
   const user = await User.findOne({ tgId: ctx.from!.id });
   const hasAccess = !!user?.hasAccess;
-  await safeReply(ctx, "Главное меню:", kbMain(hasAccess));
+  const balance = user?.balance || 0;
+  await safeReply(ctx, "Главное меню:", kbMain(hasAccess, balance));
 });
 
 /* ========= Добавляем совместимость с index.ts (launch/stop) ========= */
