@@ -25,6 +25,8 @@
   "license": "ISC",
   "dependencies": {
     "@grammyjs/parse-mode": "^2.2.0",
+    "@ton/core": "^0.62.0",
+    "@ton/ton": "^16.1.0",
     "axios": "^1.13.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -40,7 +42,8 @@
     "morgan": "^1.10.1",
     "node-cron": "^4.2.1",
     "telegraf": "^4.16.3",
-    "telegram": "^2.25.15"
+    "telegram": "^2.25.15",
+    "twilio": "^5.11.1"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.9",

@@ -1,3 +1,4 @@
+// backend/src/index.ts
 import express from "express";
 import cookieParser from "cookie-parser";
 import engine from "ejs-mate";
@@ -5,17 +6,19 @@ import path from "path";
 import morgan from "morgan";
 import helmet from "helmet";
 
-// ✅ Новые импорты
 import { ENV, isDev } from "./config/env.js";
 import { connectDatabase } from "./config/database.js";
 
 import bot from "./tgBot/bot.js";
 import router from "./routes/router.js";
 import apiRouter from "./routes/api.js";
+import phoneRouter from "./routes/phone.js"; // ✅ Новый роут
+import { setupCronJobs } from "./scripts/process-payments.js"; // ✅ Крон для платежей
 
 const app = express();
+
 /**
- * CORS — ставим первым
+ * CORS
  */
 app.use((req, res, next) => {
   const allowedOrigins = [
@@ -27,7 +30,7 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && allowedOrigins.includes(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
-    res.header("Access-Control-Allow-Credentials", "true"); // ← ДОБАВИТЬ ЭТУ СТРОКУ
+    res.header("Access-Control-Allow-Credentials", "true");
   }
   
   res.header(
@@ -77,6 +80,7 @@ app.use("/api", (req, _res, next) => {
 });
 
 app.use("/api", apiRouter);
+app.use("/api/phone", phoneRouter); // ✅ Роуты для номеров и платежей
 app.use("/", router);
 
 /**
@@ -101,9 +105,15 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 /**
  * Start server
  */
-app.listen(ENV.PORT, () => {
+app.listen(ENV.PORT, async () => {
   console.log(`🚀 Server running on port ${ENV.PORT}`);
   console.log(`📍 Environment: ${ENV.NODE_ENV}`);
+  
+  // ✅ Запускаем крон для автоматической обработки платежей
+  if (ENV.NODE_ENV === 'production') {
+    await setupCronJobs();
+    console.log('✅ Payment processing cron started');
+  }
 });
 
 // Telegram Bot launcher
