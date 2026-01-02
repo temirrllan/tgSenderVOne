@@ -191,7 +191,12 @@ const bot = new GrammyBot<MyContext>(BOT_TOKEN) as unknown as LaunchableBot;
 bot.use(session({ initial: initialSession }));
 
 /* ========= Handlers ========= */
-
+// Генерация memo-ключа для пополнения баланса
+function generateMemo(): string {
+  const ts = Date.now().toString(36).toUpperCase();
+  const rnd = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `${ts}-${rnd}`;
+}
 // /start (+payload refCode)
 bot.command("start", async (ctx) => {
   try {
@@ -494,10 +499,14 @@ bot.callbackQuery("balance", async (ctx) => {
     if (!user) return ctx.answerCallbackQuery({ text: "Сначала /start" });
 
     const text =
-      `<b>Ваш баланс</b>\n\n` +
+      `<b>💰 Ваш баланс</b>\n\n` +
       `Текущий баланс: <b>$${user.balance}</b>\n` +
       `Статус доступа: <b>${user.hasAccess ? "АКТИВЕН ✅" : "НЕ ОПЛАЧЕН ❌"}</b>\n\n` +
-      `Вы можете пополнить баланс для создания новых ботов.`;
+      `<b>Что можно купить:</b>\n` +
+      `• Доступ к приложению: <b>$50</b>\n` +
+      `• Создание бота: <b>$8</b>\n` +
+      `• Аренда номера: <b>$1/месяц</b>\n\n` +
+      `Пополните баланс через TON или USDT`;
 
     const kb = new InlineKeyboard()
       .text("💰 Пополнить баланс", "topup")
@@ -517,23 +526,98 @@ bot.callbackQuery("balance", async (ctx) => {
 // ✅ 6. Заглушка пополнения баланса (пока без реальной оплаты)
 bot.callbackQuery("topup", async (ctx) => {
   try {
+    const user = await User.findOne({ tgId: ctx.from!.id });
+    if (!user) return ctx.answerCallbackQuery({ text: "Сначала /start" });
+
+    // Генерируем уникальный memo-ключ
+    const memo = generateMemo();
+    
+    // Создаем запись в TxHistory
+    await TxHistory.create({
+      user: user._id,
+      type: 'OTHER',
+      status: 'pending',
+      amount: 0, // Сумма будет определена после оплаты
+      currency: 'USD',
+      wallet: CRYPTO_WALLET,
+      code12: memo,
+      meta: { type: 'balance_topup' },
+    });
+
     const text =
-      `<b>Пополнение баланса</b>\n\n` +
-      `🚧 Функция в разработке\n\n` +
-      `Скоро здесь будут способы пополнения баланса через криптовалюту.`;
+      `<b>💰 Пополнение баланса</b>\n\n` +
+      `Отправьте любую сумму в TON или USDT на адрес:\n` +
+      `<code>${CRYPTO_WALLET}</code>\n\n` +
+      `⚠️ <b>ВАЖНО: Укажите memo-ключ в комментарии к переводу:</b>\n` +
+      `<code>${memo}</code>\n\n` +
+      `📝 <b>Инструкция:</b>\n` +
+      `1. Скопируйте адрес кошелька\n` +
+      `2. Скопируйте memo-ключ\n` +
+      `3. Отправьте перевод с memo в комментарии\n` +
+      `4. Нажмите "Проверить платеж"\n\n` +
+      `⏱ Обработка занимает до 10 минут\n\n` +
+      `Текущий баланс: <b>$${user.balance}</b>`;
 
     const kb = new InlineKeyboard()
+      .text("✅ Проверить платеж", `check_topup_${memo}`)
+      .row()
       .webApp("📲 Открыть приложение", MINIAPP_URL)
       .row()
       .text("◀️ Назад", "balance");
 
     await safeEdit(ctx, text, kb);
-    await ctx.answerCallbackQuery({ text: "Функция в разработке" });
   } catch (e) {
     console.error(e);
     await ctx.answerCallbackQuery({ text: "Ошибка" });
   }
 });
+bot.callbackQuery(/^check_topup_(.+)$/, async (ctx) => {
+  const memo = ctx.match![1];
+  
+  try {
+    const user = await User.findOne({ tgId: ctx.from!.id });
+    if (!user) return ctx.answerCallbackQuery({ text: "Сначала /start" });
+
+    // Импортируем функцию проверки платежа
+    const { processPayment } = await import("../services/ton-payment.service.js");
+    
+    // Проверяем платеж
+    const result = await processPayment(user._id as any, memo);
+
+    if (result.success) {
+      await ctx.answerCallbackQuery({ 
+        text: `Платеж подтвержден! +$${result.amount?.toFixed(2)}`,
+        show_alert: true,
+      });
+
+      // Обновляем данные пользователя
+      const updatedUser = await User.findById(user._id);
+      
+      const text =
+        `🎉 <b>Баланс пополнен!</b>\n\n` +
+        `Зачислено: <b>+$${result.amount?.toFixed(2)}</b>\n` +
+        `Текущий баланс: <b>$${updatedUser?.balance || 0}</b>\n\n` +
+        `Теперь вы можете:\n` +
+        `• Купить доступ к приложению ($50)\n` +
+        `• Создавать ботов ($8 за каждого)\n` +
+        `• Покупать номера ($1/месяц)`;
+
+      await safeEdit(ctx, text, kbMain(!!updatedUser?.hasAccess, updatedUser?.balance || 0));
+    } else {
+      await ctx.answerCallbackQuery({
+        text: result.message,
+        show_alert: true,
+      });
+    }
+  } catch (e) {
+    console.error(e);
+    await ctx.answerCallbackQuery({ 
+      text: "Ошибка проверки платежа",
+      show_alert: true,
+    });
+  }
+});
+
 // Фолбэк
 bot.on("message", async (ctx) => {
   const user = await User.findOne({ tgId: ctx.from!.id });

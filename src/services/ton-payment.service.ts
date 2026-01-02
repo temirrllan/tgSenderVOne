@@ -1,25 +1,21 @@
 // backend/src/services/ton-payment.service.ts
-import { TonClient, Address } from '@ton/ton';
+import axios from 'axios';
 import { User } from '../models/User.js';
 import { TxHistory } from '../models/TxHistory.js';
 import { Types } from 'mongoose';
 
 const WALLET_ADDRESS = process.env.TON_WALLET_ADDRESS || '';
-const TON_API_KEY = process.env.TON_API_KEY || '';
+const TONCENTER_API_KEY = process.env.TON_API_KEY || '';
+const TONCENTER_URL = 'https://toncenter.com/api/v2';
 
-// TON API endpoint (можно использовать toncenter.com или tonapi.io)
-const client = new TonClient({
-  endpoint: 'https://toncenter.com/api/v2/jsonRPC',
-  apiKey: TON_API_KEY,
-});
-
-interface Transaction {
+interface TonTransaction {
   hash: string;
   from: string;
   to: string;
   value: string; // в nanotons
   comment: string;
   timestamp: number;
+  utime: number;
 }
 
 /**
@@ -30,67 +26,113 @@ function nanotonToTon(nanoton: string): number {
 }
 
 /**
- * Конвертация TON в USD (примерный курс, лучше брать с API)
+ * Получить актуальный курс TON/USD через CoinGecko
  */
-async function tonToUsd(ton: number): Promise<number> {
-  // TODO: Интегрировать с API для получения актуального курса
-  // Например: CoinGecko, CoinMarketCap
-  const TON_USD_RATE = 2.4; // Примерный курс
-  return ton * TON_USD_RATE;
+async function getTonUsdRate(): Promise<number> {
+  try {
+    const response = await axios.get(
+      'https://api.coingecko.com/api/v3/simple/price',
+      {
+        params: {
+          ids: 'the-open-network',
+          vs_currencies: 'usd',
+        },
+        timeout: 5000,
+      }
+    );
+    
+    const rate = response.data['the-open-network']?.usd;
+    
+    if (!rate || isNaN(rate)) {
+      console.warn('⚠️ Invalid TON rate, using fallback');
+      return 2.4;
+    }
+    
+    console.log(`💰 TON/USD rate: $${rate}`);
+    return rate;
+  } catch (error) {
+    console.error('❌ Failed to get TON rate:', error);
+    return 2.4; // Fallback курс
+  }
 }
 
 /**
- * Получить последние транзакции на кошелек
+ * Конвертация TON в USD
+ */
+async function tonToUsd(ton: number): Promise<number> {
+  const rate = await getTonUsdRate();
+  return ton * rate;
+}
+
+/**
+ * Получить последние транзакции кошелька через TONCenter API
  */
 export async function getWalletTransactions(
-  limit: number = 10
-): Promise<Transaction[]> {
+  limit: number = 100
+): Promise<TonTransaction[]> {
   try {
-    const address = Address.parse(WALLET_ADDRESS);
-    const transactions = await client.getTransactions(address, { limit });
+    console.log(`🔍 Fetching ${limit} transactions for ${WALLET_ADDRESS}`);
+    
+    const response = await axios.get(`${TONCENTER_URL}/getTransactions`, {
+      params: {
+        address: WALLET_ADDRESS,
+        limit,
+        archival: false,
+      },
+      headers: {
+        'X-API-Key': TONCENTER_API_KEY,
+      },
+      timeout: 10000,
+    });
 
-    return transactions
-      .filter(tx => tx.inMessage?.info.type === 'internal') // Только входящие
-      .map(tx => {
-        const inMsg = tx.inMessage!;
-        const info = inMsg.info;
-        
-        // Извлекаем комментарий (memo) из body
-        let comment = '';
-        try {
-          const body = inMsg.body;
-          if (body && typeof body.beginParse === 'function') {
-            const slice = body.beginParse();
-            // Пропускаем op code (4 байта)
-            if (slice.remainingBits >= 32) {
-              slice.loadUint(32);
-              // Читаем текст если есть
-              if (slice.remainingBits >= 8) {
-                comment = slice.loadStringTail();
-              }
+    if (!response.data?.ok || !response.data?.result) {
+      throw new Error('Invalid API response');
+    }
+
+    const transactions: TonTransaction[] = [];
+
+    for (const tx of response.data.result) {
+      // Только входящие транзакции
+      if (!tx.in_msg || !tx.in_msg.source || tx.in_msg.source === '') {
+        continue;
+      }
+
+      // Извлекаем комментарий (memo)
+      let comment = '';
+      try {
+        if (tx.in_msg.message) {
+          const msg = tx.in_msg.message;
+          
+          if (typeof msg === 'string') {
+            // Декодируем base64
+            try {
+              const decoded = Buffer.from(msg, 'base64').toString('utf-8');
+              // Убираем non-printable символы
+              comment = decoded.replace(/[^\x20-\x7E]/g, '').trim();
+            } catch {
+              comment = msg.trim();
             }
           }
-        } catch (e) {
-          console.error('Failed to parse comment:', e);
         }
+      } catch (e) {
+        console.error('Failed to parse comment:', e);
+      }
 
-        // Безопасное получение адреса получателя
-        const destAddress = info.type === 'internal' ? info.dest : undefined;
-        
-        // Безопасное получение суммы
-        const value = info.type === 'internal' ? info.value.coins.toString() : '0';
-
-        return {
-          hash: tx.hash().toString('hex'),
-          from: inMsg.info.src?.toString() || '',
-          to: destAddress?.toString() || '',
-          value,
-          comment,
-          timestamp: tx.now,
-        };
+      transactions.push({
+        hash: tx.transaction_id?.hash || '',
+        from: tx.in_msg.source || '',
+        to: tx.in_msg.destination || WALLET_ADDRESS,
+        value: tx.in_msg.value || '0',
+        comment,
+        timestamp: tx.utime || 0,
+        utime: tx.utime || 0,
       });
-  } catch (error) {
-    console.error('❌ Failed to get transactions:', error);
+    }
+
+    console.log(`✅ Found ${transactions.length} incoming transactions`);
+    return transactions;
+  } catch (error: any) {
+    console.error('❌ Failed to get transactions:', error.message);
     throw new Error('Failed to fetch wallet transactions');
   }
 }
@@ -106,18 +148,32 @@ export async function checkPaymentByMemo(memo: string): Promise<{
   timestamp?: number;
 }> {
   try {
-    const transactions = await getWalletTransactions(100); // Последние 100 транзакций
+    console.log(`🔎 Checking payment with memo: ${memo}`);
     
-    const found = transactions.find(tx => 
-      tx.comment.trim() === memo.trim()
-    );
+    const transactions = await getWalletTransactions(100);
+    
+    const found = transactions.find(tx => {
+      const cleanMemo = memo.trim().toLowerCase();
+      const cleanComment = tx.comment.trim().toLowerCase();
+      
+      // Проверяем точное совпадение или вхождение
+      return cleanComment === cleanMemo || cleanComment.includes(cleanMemo);
+    });
 
     if (!found) {
+      console.log(`❌ Payment not found for memo: ${memo}`);
       return { found: false };
     }
 
     const tonAmount = nanotonToTon(found.value);
     const usdAmount = await tonToUsd(tonAmount);
+
+    console.log(`✅ Payment found:`, {
+      memo,
+      tonAmount: `${tonAmount} TON`,
+      usdAmount: `$${usdAmount.toFixed(2)}`,
+      txHash: found.hash,
+    });
 
     return {
       found: true,
@@ -145,6 +201,8 @@ export async function processPayment(
   amount?: number;
 }> {
   try {
+    console.log(`💳 Processing payment for user ${userId}, memo: ${memo}`);
+    
     // 1. Проверяем транзакцию в блокчейне
     const payment = await checkPaymentByMemo(memo);
 
@@ -162,6 +220,7 @@ export async function processPayment(
     });
 
     if (existingTx) {
+      console.log(`⚠️ Payment already processed: ${memo}`);
       return {
         success: false,
         message: 'Этот платеж уже был обработан',
@@ -187,6 +246,7 @@ export async function processPayment(
         meta: {
           tonAmount: payment.tonAmount,
           timestamp: payment.timestamp,
+          type: 'balance_topup',
         },
       });
     }
@@ -194,6 +254,7 @@ export async function processPayment(
     // 4. Подтверждаем транзакцию
     tx.status = 'confirmed';
     tx.txHash = txHash;
+    tx.amount = txAmount; // Обновляем сумму из реальной транзакции
     tx.confirmedAt = new Date();
     await tx.save();
 
@@ -203,19 +264,23 @@ export async function processPayment(
       throw new Error('User not found');
     }
 
-    const amountToAdd = payment.amount ?? 0;
-    user.balance += amountToAdd;
+    user.balance += txAmount;
     await user.save();
 
-    console.log(`✅ Payment processed: ${memo}, amount: ${amountToAdd}, user: ${user.tgId}`);
+    console.log(`✅ Payment processed successfully:`, {
+      memo,
+      amount: `$${txAmount.toFixed(2)}`,
+      user: user.tgId,
+      newBalance: `$${user.balance}`,
+    });
 
     return {
       success: true,
-      message: `Платеж подтвержден! Начислено ${amountToAdd.toFixed(2)}`,
+      message: `Платеж подтвержден! Начислено $${txAmount.toFixed(2)}`,
       balance: user.balance,
-      amount: amountToAdd,
+      amount: txAmount,
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error('❌ Failed to process payment:', error);
     return {
       success: false,
@@ -230,6 +295,8 @@ export async function processPayment(
  */
 export async function processPendingPayments(): Promise<void> {
   try {
+    console.log('\n⏰ Starting automatic payment processing...');
+    
     // Получаем все pending транзакции за последние 24 часа
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
     
@@ -238,17 +305,40 @@ export async function processPendingPayments(): Promise<void> {
       createdAt: { $gte: yesterday },
     });
 
-    console.log(`🔄 Processing ${pendingTxs.length} pending payments...`);
+    console.log(`📋 Found ${pendingTxs.length} pending payments`);
+
+    if (pendingTxs.length === 0) {
+      console.log('✅ No pending payments to process');
+      return;
+    }
+
+    let processed = 0;
+    let failed = 0;
 
     for (const tx of pendingTxs) {
       try {
-        await processPayment(tx.user as Types.ObjectId, tx.code12);
+        const result = await processPayment(tx.user as Types.ObjectId, tx.code12);
+        
+        if (result.success) {
+          processed++;
+          console.log(`✅ Processed: ${tx.code12}`);
+        } else {
+          console.log(`⏳ Still pending: ${tx.code12}`);
+        }
+        
+        // Задержка между запросами чтобы не перегружать API
+        await new Promise(resolve => setTimeout(resolve, 1000));
       } catch (error) {
-        console.error(`Failed to process tx ${tx.code12}:`, error);
+        failed++;
+        console.error(`❌ Failed to process tx ${tx.code12}:`, error);
       }
     }
 
-    console.log('✅ Pending payments processed');
+    console.log(`\n📊 Payment processing summary:`);
+    console.log(`   Processed: ${processed}`);
+    console.log(`   Failed: ${failed}`);
+    console.log(`   Still pending: ${pendingTxs.length - processed - failed}`);
+    console.log('✅ Automatic payment processing completed\n');
   } catch (error) {
     console.error('❌ Failed to process pending payments:', error);
   }

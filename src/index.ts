@@ -12,8 +12,9 @@ import { connectDatabase } from "./config/database.js";
 import bot from "./tgBot/bot.js";
 import router from "./routes/router.js";
 import apiRouter from "./routes/api.js";
-import phoneRouter from "./routes/phone.js"; // ✅ Новый роут
-import { setupCronJobs } from "./scripts/process-payments.js"; // ✅ Крон для платежей
+import phoneRouter from "./routes/phone.js";
+import webhookRouter from "./routes/webhook.js"; // ✅ НОВОЕ
+import { setupPaymentCron } from "./services/payment-cron.service.js"; // ✅ НОВОЕ
 
 const app = express();
 
@@ -80,14 +81,19 @@ app.use("/api", (req, _res, next) => {
 });
 
 app.use("/api", apiRouter);
-app.use("/api/phone", phoneRouter); // ✅ Роуты для номеров и платежей
+app.use("/api/phone", phoneRouter);
+app.use("/api/webhook", webhookRouter); // ✅ НОВОЕ: Webhook роуты
 app.use("/", router);
 
 /**
  * Health check
  */
 app.get("/health", (req, res) => {
-  res.status(200).json({ ok: true, uptime: process.uptime() });
+  res.status(200).json({ 
+    ok: true, 
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 /**
@@ -109,10 +115,13 @@ app.listen(ENV.PORT, async () => {
   console.log(`🚀 Server running on port ${ENV.PORT}`);
   console.log(`📍 Environment: ${ENV.NODE_ENV}`);
   
-  // ✅ Запускаем крон для автоматической обработки платежей
+  // ✅ НОВОЕ: Запускаем автоматическую обработку платежей
   if (ENV.NODE_ENV === 'production') {
-    await setupCronJobs();
+    setupPaymentCron();
     console.log('✅ Payment processing cron started');
+  } else {
+    console.log('⚠️ Payment cron disabled in development mode');
+    console.log('💡 Use POST /api/webhook/process-payments for manual testing');
   }
 });
 

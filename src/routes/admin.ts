@@ -605,4 +605,78 @@ router.get(
     return success(res, { bot });
   })
 );
+
+
+// backend/src/routes/admin.ts (ДОБАВЬ В СУЩЕСТВУЮЩИЙ ФАЙЛ)
+
+// ✅ НОВЫЙ ЭНДПОИНТ: Ручная обработка платежей (только для админов)
+router.post(
+  "/process-payments",
+  asyncWrap(async (req: Request, res: Response) => {
+    // Импортируем функцию
+    const { manualProcessPayments } = await import("../services/payment-cron.service.js");
+    
+    const result = await manualProcessPayments();
+    
+    if (result.success) {
+      return success(res, { message: result.message });
+    } else {
+      return fail(res, 500, result.message);
+    }
+  })
+);
+
+// ✅ НОВЫЙ ЭНДПОИНТ: Проверка конкретного платежа по memo
+router.post(
+  "/check-payment",
+  express.json(),
+  asyncWrap(async (req: Request, res: Response) => {
+    const { memo, userId } = req.body as { memo?: string; userId?: string };
+    
+    if (!memo) {
+      return fail(res, 400, "memo required");
+    }
+    
+    if (!userId || !mongoose.isValidObjectId(userId)) {
+      return fail(res, 400, "valid userId required");
+    }
+    
+    // Импортируем функцию
+    const { processPayment } = await import("../services/ton-payment.service.js");
+    
+    const result = await processPayment(userId as any, memo);
+    
+    return success(res, result);
+  })
+);
+
+// ✅ НОВЫЙ ЭНДПОИНТ: История платежей
+router.get(
+  "/payments",
+  asyncWrap(async (req: Request, res: Response) => {
+    const limit = Math.min(Number(req.query.limit ?? 50), 200);
+    const offset = Math.max(Number(req.query.offset ?? 0), 0);
+    const status = String(req.query.status ?? "").trim();
+    
+    const query: Record<string, any> = {};
+    
+    if (status && ["pending", "confirmed", "failed", "expired"].includes(status)) {
+      query.status = status;
+    }
+    
+    const [items, total] = await Promise.all([
+      TxHistory.find(query)
+        .populate("user", "tgId username firstName")
+        .select("user type status amount currency code12 txHash createdAt confirmedAt")
+        .sort({ createdAt: -1 })
+        .skip(offset)
+        .limit(limit)
+        .lean()
+        .exec(),
+      TxHistory.countDocuments(query).exec(),
+    ]);
+    
+    return success(res, { items, total, limit, offset });
+  })
+);
 export default router;
