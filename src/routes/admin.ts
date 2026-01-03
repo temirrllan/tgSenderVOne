@@ -644,7 +644,11 @@ router.post(
     // Импортируем функцию
     const { processPayment } = await import("../services/ton-payment.service.js");
     
-    const result = await processPayment(userId as any, memo);
+    // ✅ ИСПРАВЛЕНО: Правильная типизация userId
+    const result = await processPayment(
+      new Types.ObjectId(userId), 
+      memo
+    );
     
     return success(res, result);
   })
@@ -663,6 +667,9 @@ router.get(
     if (status && ["pending", "confirmed", "failed", "expired"].includes(status)) {
       query.status = status;
     }
+    
+    // ✅ ИСПРАВЛЕНО: Импорт TxHistory
+    const { TxHistory } = await import("../models/TxHistory.js");
     
     const [items, total] = await Promise.all([
       TxHistory.find(query)

@@ -1,5 +1,6 @@
 // backend/src/routes/webhook.ts
-import express, { Router, Request, Response } from 'express';
+import express, { Router } from 'express';
+import type { Request, Response } from 'express';
 import { processPendingPayments } from '../services/ton-payment.service.js';
 
 const router: Router = express.Router();

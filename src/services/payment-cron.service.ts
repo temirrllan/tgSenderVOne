@@ -5,18 +5,19 @@ import { processPendingPayments } from './ton-payment.service.js';
 /**
  * Настройка крон-задач для автоматической обработки платежей
  * 
- * Запускается каждые 5 минут: */5 * * * *
+ * Cron expressions:
+ * - Every minute: * * * * *
+ * - Every 3 minutes: *​/3 * * * *
+ * - Every 5 minutes: *​/5 * * * *
+ * - Every 10 minutes: *​/10 * * * *
+ * - Every hour: 0 * * * *
  * 
- * Можно настроить разные интервалы:
- * - Каждую минуту: * * * * *
- * - Каждые 3 минуты: */3 * * * *
- * - Каждые 10 минут: */10 * * * *
- * - Каждый час: 0 * * * *
+ * Default: runs every 5 minutes
  */
 export function setupPaymentCron() {
   console.log('⏰ Setting up payment processing cron job...');
   
-  // Запускаем каждые 5 минут
+  // Schedule: every 5 minutes
   cron.schedule('*/5 * * * *', async () => {
     console.log('\n🔄 [CRON] Running automatic payment processing...');
     
@@ -30,13 +31,13 @@ export function setupPaymentCron() {
   
   console.log('✅ Payment cron job configured (runs every 5 minutes)');
   
-  // Первый запуск сразу при старте сервера
+  // Initial run on server start
   console.log('🚀 Running initial payment processing...');
   processPendingPayments().catch(console.error);
 }
 
 /**
- * Ручной запуск обработки платежей (для тестирования)
+ * Manual payment processing (for testing)
  */
 export async function manualProcessPayments(): Promise<{
   success: boolean;

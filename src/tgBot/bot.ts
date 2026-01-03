@@ -81,16 +81,28 @@ async function ensureMongo() {
 /**
  * Тянем аватар юзера из Telegram и сохраняем в user.avatarUrl, если там пусто
  */
+/**
+ * Загружает аватар пользователя из Telegram и сохраняет в user.avatarUrl
+ * Если у пользователя уже есть аватар, функция ничего не делает
+ */
 async function ensureUserAvatar(user: any, ctx: MyContext) {
   try {
-    if (user.avatarUrl && typeof user.avatarUrl === "string") return;
+    // Если аватар уже есть - пропускаем
+    if (user.avatarUrl && typeof user.avatarUrl === "string") {
+      return;
+    }
 
-    const telegramUser  = ctx.from;
-    if (!telegramUser ) return;
+    const telegramUser = ctx.from;
+    if (!telegramUser) {
+      return;
+    }
 
-    const photos = await ctx.api.getUserProfilePhotos(telegramUser.id, { limit: 1 });
+    // Получаем фотографии профиля (максимум 1)
+    const photos = await ctx.api.getUserProfilePhotos(telegramUser.id, { 
+      limit: 1 
+    });
 
-    // безопасные проверки
+    // Безопасные проверки наличия фото
     if (
       !photos ||
       typeof photos.total_count !== "number" ||
@@ -103,22 +115,31 @@ async function ensureUserAvatar(user: any, ctx: MyContext) {
       return;
     }
 
-    // TS: точно не undefined
-    const firstSize = (photos.photos[0][0])!;
-    if (!firstSize.file_id) return;
+    // Получаем первый размер первого фото
+    const firstSize = photos.photos[0][0];
+    
+    // ✅ КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: проверяем что firstSize существует И имеет file_id
+    if (!firstSize || !firstSize.file_id) {
+      return;
+    }
 
+    // ✅ ИСПРАВЛЕНО: используем firstSize.file_id (не user.file_id!)
     const file = await ctx.api.getFile(firstSize.file_id);
-    if (!file?.file_path) return;
+    
+    if (!file || !file.file_path) {
+      return;
+    }
 
+    // Формируем URL к файлу
     const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 
+    // Сохраняем в БД
     user.avatarUrl = url;
     await user.save();
 
-
-    console.log("Saved avatarUrl for user", user.tgId, url);
+    console.log("✅ Saved avatarUrl for user", user.tgId, url);
   } catch (err) {
-    console.error("ensureUserAvatar error:", err);
+    console.error("❌ ensureUserAvatar error:", err);
   }
 }
 
@@ -572,16 +593,27 @@ bot.callbackQuery("topup", async (ctx) => {
   }
 });
 bot.callbackQuery(/^check_topup_(.+)$/, async (ctx) => {
-  const memo = ctx.match![1];
+  // ✅ ИСПРАВЛЕНО: Безопасное извлечение memo с проверкой
+  const memo = ctx.match?.[1];
+  
+  if (!memo) {
+    await ctx.answerCallbackQuery({ 
+      text: "Ошибка: memo-ключ не найден",
+      show_alert: true,
+    });
+    return;
+  }
   
   try {
     const user = await User.findOne({ tgId: ctx.from!.id });
-    if (!user) return ctx.answerCallbackQuery({ text: "Сначала /start" });
+    if (!user) {
+      return ctx.answerCallbackQuery({ text: "Сначала /start" });
+    }
 
     // Импортируем функцию проверки платежа
     const { processPayment } = await import("../services/ton-payment.service.js");
     
-    // Проверяем платеж
+    // ✅ Теперь memo точно string, не undefined
     const result = await processPayment(user._id as any, memo);
 
     if (result.success) {
